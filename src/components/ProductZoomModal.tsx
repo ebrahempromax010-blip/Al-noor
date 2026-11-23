@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Gem, MessageCircle, ShoppingBag, X } from 'lucide-react';
+import { Gem, Heart, MessageCircle, ShoppingBag, X } from 'lucide-react';
 import { Language, MarketRates, Product } from '../types/store';
 import { t } from '../utils/i18n';
 import {
@@ -13,6 +13,8 @@ interface ProductZoomModalProps {
   rates: MarketRates;
   lang: Language;
   whatsappNumber: string;
+  isFavorite?: boolean;
+  onToggleFavorite?: (productId: string) => void;
   onClose: () => void;
   onAddToCart: (productId: string) => void;
 }
@@ -22,6 +24,8 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
   rates,
   lang,
   whatsappNumber,
+  isFavorite = false,
+  onToggleFavorite,
   onClose,
   onAddToCart,
 }) => {
@@ -127,17 +131,42 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
               </div>
 
               <div className="mt-4 flex flex-col gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onAddToCart(product.id);
-                    onClose();
-                  }}
-                  className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 cursor-pointer"
-                >
-                  <ShoppingBag className="h-4 w-4" />
-                  <span>{copy.addToCart}</span>
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onAddToCart(product.id);
+                      onClose();
+                    }}
+                    className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 cursor-pointer"
+                  >
+                    <ShoppingBag className="h-4 w-4" />
+                    <span>{copy.addToCart}</span>
+                  </button>
+                  {onToggleFavorite && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleFavorite(product.id)}
+                      aria-pressed={isFavorite}
+                      aria-label={
+                        isFavorite
+                          ? `${copy.removeFromFavorites}: ${name}`
+                          : `${copy.addToFavorites}: ${name}`
+                      }
+                      className={`flex min-h-[44px] w-12 items-center justify-center rounded-xl border transition cursor-pointer ${
+                        isFavorite
+                          ? 'border-rose-400/70 bg-rose-500/20 text-rose-400'
+                          : 'border-amber-500/30 bg-[#0B0F17] text-slate-200 hover:border-rose-400/60 hover:text-rose-400'
+                      }`}
+                    >
+                      <Heart
+                        className={`h-5 w-5 ${
+                          isFavorite ? 'fill-rose-500 text-rose-500' : ''
+                        }`}
+                      />
+                    </button>
+                  )}
+                </div>
                 <a
                   href={whatsappUrl}
                   target="_blank"

@@ -7,18 +7,22 @@ import {
   Edit3,
   FolderKanban,
   ImagePlus,
+  Infinity as InfinityIcon,
   Loader2,
   MapPin,
   Package,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
+  Search,
   Sparkles,
   Trash2,
   TrendingUp,
   Upload,
   X,
 } from 'lucide-react';
+import { DEFAULT_STORE_DATA } from '../data/defaultStoreData';
 import {
   BranchInfo,
   Category,
@@ -34,7 +38,14 @@ import {
 } from '../types/store';
 import { t } from '../utils/i18n';
 import { compressImageToUnder120KB } from '../utils/imageCompressor';
-import { calculateProductPrice, formatCurrency, validateStoreBackup } from '../utils/storeLogic';
+import {
+  calculateProductPrice,
+  filterAdminProducts,
+  formatCurrency,
+  removeProductsByIds,
+  upsertProductList,
+  validateStoreBackup,
+} from '../utils/storeLogic';
 
 interface AdminDashboardProps {
   lang: Language;
@@ -43,6 +54,9 @@ interface AdminDashboardProps {
   cloudError: string | null;
   isRefreshingMarket: boolean;
   onSaveStoreData: (nextData: StoreData) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateStoreData: (
+    updater: (latest: StoreData) => StoreData
+  ) => Promise<{ ok: boolean; error?: string }>;
   onFetchFromFirebase: () => Promise<{ ok: boolean; error?: string }>;
   onRefreshMarketRates: () => Promise<{ ok: boolean; rates?: MarketRates; error?: string }>;
   onExitAdmin: () => void;
@@ -75,6 +89,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   cloudError,
   isRefreshingMarket,
   onSaveStoreData,
+  onUpdateStoreData,
   onFetchFromFirebase,
   onRefreshMarketRates,
   onExitAdmin,
@@ -84,10 +99,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Product Form State
+  // Product Form & Unlimited Management State
   const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM);
   const [isEditingProduct, setIsEditingProduct] = useState(false);
   const [compressedInfo, setCompressedInfo] = useState<string | null>(null);
+  const [adminProductSearch, setAdminProductSearch] = useState('');
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   // Rates Form State
   const [ratesForm, setRatesForm] = useState<MarketRates>(storeData.rates);
@@ -116,6 +135,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (storeData.defaultLanguage) {
       setDefaultLangForm(storeData.defaultLanguage);
     }
+    setSelectedProductIds((prev) =>
+      prev.filter((id) => storeData.products.some((p) => p.id === id))
+    );
   }, [storeData]);
 
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -140,9 +162,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } else {
       setStatusMessage({
         type: 'error',
-        text: res.error || 'حدث خطأ أثناء الحفظ في سحابة Firebase.',
+        text: res.error || (lang === 'ar' ? 'حدث خطأ أثناء الحفظ في سحابة Firebase.' : 'Failed to save to Firebase Cloud.'),
       });
     }
+  };
+
+  const commitMutatedToCloud = async (
+    updater: (latest: StoreData) => StoreData,
+    successMsg: string
+  ) => {
+    setIsSaving(true);
+    setStatusMessage(null);
+    const res = await onUpdateStoreData(updater);
+    setIsSaving(false);
+    if (res.ok) {
+      setStatusMessage({ type: 'success', text: successMsg });
+    } else {
+      setStatusMessage({
+        type: 'error',
+        text: res.error || (lang === 'ar' ? 'حدث خطأ أثناء الحفظ في سحابة Firebase.' : 'Failed to save to Firebase Cloud.'),
+      });
+    }
+    return res.ok;
   };
 
   const handleFetchCloud = async () => {
@@ -223,26 +264,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Product Submit
+  // Product Submit (Unlimited daily additions & edits)
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!productForm.nameAr.trim() || !productForm.nameEn.trim()) {
+    const rawAr = productForm.nameAr.trim();
+    const rawEn = productForm.nameEn.trim();
+    if (!rawAr && !rawEn) {
       setStatusMessage({
         type: 'error',
-        text: 'يرجى إدخال اسم المنتج باللغتين العربية والإنجليزية.',
+        text:
+          lang === 'ar'
+            ? 'يرجى إدخال اسم المنتج بالعربية أو الإنجليزية على الأقل.'
+            : 'Please enter a product name (Arabic or English).',
       });
       return;
     }
+
+    const resolvedNameAr = rawAr || rawEn;
+    const resolvedNameEn = rawEn || rawAr;
 
     const code =
       productForm.code.trim() ||
       `AG-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const newProduct: Product = {
-      id: isEditingProduct ? productForm.id : `prod-${Date.now()}`,
+      id: isEditingProduct ? productForm.id : `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       code,
-      nameAr: productForm.nameAr.trim(),
-      nameEn: productForm.nameEn.trim(),
+      nameAr: resolvedNameAr,
+      nameEn: resolvedNameEn,
       categoryId: productForm.categoryId,
       metal: productForm.metal,
       karat: productForm.karat,
@@ -252,35 +301,101 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       manualPrice: Number(productForm.manualPrice) || 0,
       discountPercent: Math.min(90, Math.max(0, Number(productForm.discountPercent) || 0)),
       imageUrl:
-        productForm.imageUrl ||
+        productForm.imageUrl.trim() ||
         '/src/assets/images/product_womens_gold_set_1795458830291.jpg',
       descriptionAr: productForm.descriptionAr.trim(),
       descriptionEn: productForm.descriptionEn.trim(),
     };
 
-    const nextProducts = isEditingProduct
-      ? storeData.products.map((p) => (p.id === newProduct.id ? newProduct : p))
-      : [newProduct, ...storeData.products];
-
-    await commitToCloud(
-      { ...storeData, products: nextProducts },
+    const success = await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        products: upsertProductList(latest.products, newProduct, isEditingProduct),
+      }),
       isEditingProduct
-        ? 'تم تعديل المنتج ونشره فوراً لجميع المستخدمين.'
-        : 'تمت إضافة المنتج الجديد ونشره فوراً على السحابة.'
+        ? lang === 'ar'
+          ? 'تم تعديل المنتج ونشره فوراً لجميع المستخدمين.'
+          : 'Product updated and published instantaneously to all users.'
+        : lang === 'ar'
+          ? 'تمت إضافة المنتج الجديد ونشره فوراً على السحابة.'
+          : 'New product added and published instantaneously to Firebase Cloud.'
     );
 
-    setProductForm(EMPTY_PRODUCT_FORM);
-    setIsEditingProduct(false);
-    setCompressedInfo(null);
+    if (success) {
+      setProductForm(EMPTY_PRODUCT_FORM);
+      setIsEditingProduct(false);
+      setCompressedInfo(null);
+    }
   };
 
   const handleDeleteProduct = async (id: string) => {
-    const nextProducts = storeData.products.filter((p) => p.id !== id);
-    await commitToCloud(
-      { ...storeData, products: nextProducts },
-      'تم حذف المنتج ومزامنة التحديث مع السحابة.'
+    setDeletingProductId(id);
+    if (isEditingProduct && productForm.id === id) {
+      setProductForm(EMPTY_PRODUCT_FORM);
+      setIsEditingProduct(false);
+      setCompressedInfo(null);
+    }
+    await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        products: removeProductsByIds(latest.products, [id]),
+      }),
+      lang === 'ar'
+        ? 'تم حذف المنتج ومزامنة التحديث فوراً مع الجميع على السحابة.'
+        : 'Product deleted and synced immediately for all users.'
+    );
+    setSelectedProductIds((prev) => prev.filter((item) => item !== id));
+    setDeletingProductId(null);
+  };
+
+  const handleBulkDeleteSelected = async () => {
+    if (selectedProductIds.length === 0) return;
+    const count = selectedProductIds.length;
+    if (isEditingProduct && selectedProductIds.includes(productForm.id)) {
+      setProductForm(EMPTY_PRODUCT_FORM);
+      setIsEditingProduct(false);
+    }
+    const ok = await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        products: removeProductsByIds(latest.products, selectedProductIds),
+      }),
+      lang === 'ar'
+        ? `تم حذف ${count} منتجاً ومزامنة المتجر فوراً لجميع الزوار.`
+        : `Deleted ${count} selected products and synced live to all users.`
+    );
+    if (ok) {
+      setSelectedProductIds([]);
+    }
+  };
+
+  const handleDeleteAllProducts = async () => {
+    setConfirmClearAll(false);
+    setProductForm(EMPTY_PRODUCT_FORM);
+    setIsEditingProduct(false);
+    setSelectedProductIds([]);
+    await commitMutatedToCloud(
+      (latest) => ({ ...latest, products: [] }),
+      lang === 'ar'
+        ? 'تم حذف جميع المنتجات ونشر التحديث فوراً على السحابة.'
+        : 'All products deleted and synced instantaneously to Firebase Cloud.'
     );
   };
+
+  const handleRestoreDefaultProducts = async () => {
+    setConfirmClearAll(false);
+    await commitMutatedToCloud(
+      (latest) => ({ ...latest, products: DEFAULT_STORE_DATA.products }),
+      lang === 'ar'
+        ? 'تمت استعادة المنتجات الافتراضية ونشرها فوراً على السحابة.'
+        : 'Default products restored and published instantaneously to Firebase Cloud.'
+    );
+  };
+
+  const filteredAdminProducts = filterAdminProducts(
+    storeData.products,
+    adminProductSearch
+  );
 
   const handleSaveRates = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -504,290 +619,552 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* TAB 1: PRODUCTS CRUD */}
       {activeTab === 'products' && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <form
-            onSubmit={handleSaveProduct}
-            className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 space-y-4 lg:col-span-5"
-          >
-            <h2 className="text-base font-bold text-amber-300">
-              {isEditingProduct ? 'تعديل منتج' : 'إضافة منتج جديد'}
-            </h2>
-
-            {/* Compressed Image Upload */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                صورة المنتج (ضغط تلقائي &lt; 120KB)
-              </label>
-              <div className="flex items-center gap-3">
-                {productForm.imageUrl && (
-                  <img
-                    src={productForm.imageUrl}
-                    alt="Preview"
-                    className="h-16 w-16 rounded-xl object-cover border border-amber-500/30"
-                  />
-                )}
-                <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#0B0F17] px-4 py-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
-                  <ImagePlus className="h-4 w-4" />
-                  <span>اختر صورة من الهاتف / الجهاز</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleProductImageUpload}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-              {compressedInfo && (
-                <p className="mt-1.5 text-[11px] text-emerald-300">{compressedInfo}</p>
-              )}
+        <div className="space-y-5">
+          {/* Unlimited Daily Edits/Additions/Deletions Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs sm:text-sm text-emerald-200">
+            <div className="flex items-center gap-2.5 font-semibold">
+              <InfinityIcon className="h-5 w-5 shrink-0 text-emerald-400" />
+              <span>
+                {lang === 'ar'
+                  ? 'تحكم مفتوح بلا قيود يومية: يمكنك إضافة، تعديل، أو حذف أي عدد من المنتجات في أي وقت مع نشر فوري على Firebase للجميع.'
+                  : 'Unlimited Daily Operations: Add, edit, or delete any number of products anytime — synced instantaneously via Firebase Cloud for every visitor.'}
+              </span>
             </div>
+            <span className="rounded-lg border border-emerald-400/30 bg-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-100 font-mono-tabular">
+              {lang === 'ar'
+                ? `${storeData.products.length} منتج منشور`
+                : `${storeData.products.length} Live Products`}
+            </span>
+          </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">اسم المنتج (عربي)</label>
-                <input
-                  type="text"
-                  required
-                  value={productForm.nameAr}
-                  onChange={(e) => setProductForm({ ...productForm, nameAr: e.target.value })}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">Product Name (EN)</label>
-                <input
-                  type="text"
-                  required
-                  value={productForm.nameEn}
-                  onChange={(e) => setProductForm({ ...productForm, nameEn: e.target.value })}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">القسم / الفئة</label>
-                <select
-                  value={productForm.categoryId}
-                  onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value })}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                >
-                  {storeData.categories
-                    .filter((c) => c.id !== 'all' && c.id !== 'offers')
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.nameAr}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">كود المنتج</label>
-                <input
-                  type="text"
-                  placeholder="AG-2105"
-                  value={productForm.code}
-                  onChange={(e) => setProductForm({ ...productForm, code: e.target.value })}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2.5">
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">المعدن</label>
-                <select
-                  value={productForm.metal}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, metal: e.target.value as MetalType })
-                  }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
-                >
-                  <option value="gold">ذهب</option>
-                  <option value="silver">فضة</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">العيار</label>
-                <select
-                  value={productForm.karat}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, karat: e.target.value as KaratType })
-                  }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
-                >
-                  <option value="24">24</option>
-                  <option value="21">21</option>
-                  <option value="18">18</option>
-                  <option value="925">925</option>
-                  <option value="999">999</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">الوزن (جم)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  value={productForm.weightGrams}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, weightGrams: Number(e.target.value) })
-                  }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2.5">
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">نظام السعر</label>
-                <select
-                  value={productForm.pricingMode}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, pricingMode: e.target.value as PricingMode })
-                  }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2 text-xs text-white"
-                >
-                  <option value="auto">تلقائي بالجرام</option>
-                  <option value="manual">سعر يدوي</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">
-                  {productForm.pricingMode === 'auto' ? 'المصنعية/جم' : 'السعر اليدوي'}
-                </label>
-                {productForm.pricingMode === 'auto' ? (
-                  <input
-                    type="number"
-                    min="0"
-                    value={productForm.makingChargePerGram}
-                    onChange={(e) =>
-                      setProductForm({
-                        ...productForm,
-                        makingChargePerGram: Number(e.target.value),
-                      })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                  />
-                ) : (
-                  <input
-                    type="number"
-                    min="0"
-                    value={productForm.manualPrice}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, manualPrice: Number(e.target.value) })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                  />
-                )}
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">نسبة الخصم %</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="90"
-                  value={productForm.discountPercent}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, discountPercent: Number(e.target.value) })
-                  }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 disabled:opacity-60 cursor-pointer"
-              >
-                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                <span>{copy.saveAndPublish}</span>
-              </button>
-              {isEditingProduct && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProductForm(EMPTY_PRODUCT_FORM);
-                    setIsEditingProduct(false);
-                  }}
-                  className="rounded-xl border border-white/15 px-4 text-xs font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer"
-                >
-                  إلغاء
-                </button>
-              )}
-            </div>
-          </form>
-
-          {/* Products List */}
-          <div className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 lg:col-span-7 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-bold text-white">
-                المنتجات الحالية ({storeData.products.length})
-              </h2>
-            </div>
-
-            <div className="space-y-2.5 max-h-[600px] overflow-y-auto pe-1">
-              {storeData.products.map((prod) => {
-                const price = calculateProductPrice(
-                  prod,
-                  storeData.rates,
-                  storeData.rates.autoLinkPrices
-                );
-                return (
-                  <div
-                    key={prod.id}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/15 bg-[#0B0F17] p-3"
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+            <form
+              onSubmit={handleSaveProduct}
+              className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 space-y-4 lg:col-span-5"
+            >
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-bold text-amber-300">
+                  {isEditingProduct
+                    ? lang === 'ar'
+                      ? 'تعديل المنتج'
+                      : 'Edit Product'
+                    : lang === 'ar'
+                      ? 'إضافة منتج جديد'
+                      : 'Add New Product'}
+                </h2>
+                {isEditingProduct && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProductForm(EMPTY_PRODUCT_FORM);
+                      setIsEditingProduct(false);
+                      setCompressedInfo(null);
+                    }}
+                    className="text-xs font-semibold text-amber-300 hover:underline cursor-pointer"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <img
-                        src={prod.imageUrl}
-                        alt={prod.nameAr}
-                        className="h-14 w-14 rounded-lg object-cover shrink-0"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-white truncate">
-                          {prod.nameAr}
+                    {lang === 'ar' ? '+ منتج جديد' : '+ New Product'}
+                  </button>
+                )}
+              </div>
+
+              {/* Compressed Image Upload or URL */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-300">
+                  {lang === 'ar'
+                    ? 'صورة المنتج (ضغط تلقائي < 120KB أو رابط مباشر)'
+                    : 'Product Image (Auto-compressed < 120KB or direct URL)'}
+                </label>
+                <div className="flex items-center gap-3">
+                  {productForm.imageUrl && (
+                    <img
+                      src={productForm.imageUrl}
+                      alt="Preview"
+                      className="h-16 w-16 rounded-xl object-cover border border-amber-500/30 shrink-0"
+                    />
+                  )}
+                  <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#0B0F17] px-4 py-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
+                    <ImagePlus className="h-4 w-4" />
+                    <span>
+                      {lang === 'ar' ? 'اختر صورة من الهاتف / الجهاز' : 'Upload Photo from Device'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProductImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <input
+                  type="url"
+                  placeholder={
+                    lang === 'ar'
+                      ? 'أو الصق رابط صورة مباشر (اختياري)...'
+                      : 'Or paste an image URL (optional)...'
+                  }
+                  value={productForm.imageUrl.startsWith('data:') ? '' : productForm.imageUrl}
+                  onChange={(e) => setProductForm({ ...productForm, imageUrl: e.target.value })}
+                  className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-slate-200 placeholder:text-slate-500"
+                />
+                {compressedInfo && (
+                  <p className="text-[11px] text-emerald-300">{compressedInfo}</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="prod-name-ar" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'اسم المنتج (عربي)' : 'Product Name (AR)'}
+                  </label>
+                  <input
+                    id="prod-name-ar"
+                    type="text"
+                    value={productForm.nameAr}
+                    onChange={(e) => setProductForm({ ...productForm, nameAr: e.target.value })}
+                    placeholder={lang === 'ar' ? 'مثال: طقم شبكة عيار 21' : 'Arabic name (optional if EN set)'}
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="prod-name-en" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'اسم المنتج (إنجليزي)' : 'Product Name (EN)'}
+                  </label>
+                  <input
+                    id="prod-name-en"
+                    type="text"
+                    value={productForm.nameEn}
+                    onChange={(e) => setProductForm({ ...productForm, nameEn: e.target.value })}
+                    placeholder={lang === 'ar' ? 'اختياري عند كتابة العربي' : 'e.g. Royal 21K Gold Set'}
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="prod-category" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'القسم / الفئة' : 'Category'}
+                  </label>
+                  <select
+                    id="prod-category"
+                    value={productForm.categoryId}
+                    onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value })}
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  >
+                    {storeData.categories
+                      .filter((c) => c.id !== 'all' && c.id !== 'offers')
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {lang === 'ar' ? c.nameAr : c.nameEn}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="prod-code" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'كود المنتج' : 'Product Code'}
+                  </label>
+                  <input
+                    id="prod-code"
+                    type="text"
+                    placeholder="AG-2105"
+                    value={productForm.code}
+                    onChange={(e) => setProductForm({ ...productForm, code: e.target.value })}
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label htmlFor="prod-metal" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'المعدن' : 'Metal'}
+                  </label>
+                  <select
+                    id="prod-metal"
+                    value={productForm.metal}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, metal: e.target.value as MetalType })
+                    }
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
+                  >
+                    <option value="gold">{lang === 'ar' ? 'ذهب' : 'Gold'}</option>
+                    <option value="silver">{lang === 'ar' ? 'فضة' : 'Silver'}</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="prod-karat" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'العيار' : 'Karat'}
+                  </label>
+                  <select
+                    id="prod-karat"
+                    value={productForm.karat}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, karat: e.target.value as KaratType })
+                    }
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
+                  >
+                    <option value="24">24</option>
+                    <option value="21">21</option>
+                    <option value="18">18</option>
+                    <option value="925">925</option>
+                    <option value="999">999</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="prod-weight" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'الوزن (جم)' : 'Weight (g)'}
+                  </label>
+                  <input
+                    id="prod-weight"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={productForm.weightGrams}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, weightGrams: Number(e.target.value) })
+                    }
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                <div>
+                  <label htmlFor="prod-pricing-mode" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'نظام السعر' : 'Pricing Mode'}
+                  </label>
+                  <select
+                    id="prod-pricing-mode"
+                    value={productForm.pricingMode}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, pricingMode: e.target.value as PricingMode })
+                    }
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2 text-xs text-white"
+                  >
+                    <option value="auto">{lang === 'ar' ? 'تلقائي بالجرام' : 'Auto / Gram'}</option>
+                    <option value="manual">{lang === 'ar' ? 'سعر يدوي' : 'Manual Price'}</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="prod-price-input" className="block text-xs text-slate-300 mb-1">
+                    {productForm.pricingMode === 'auto'
+                      ? lang === 'ar'
+                        ? 'المصنعية/جم'
+                        : 'Making / g'
+                      : lang === 'ar'
+                        ? 'السعر اليدوي'
+                        : 'Manual Price'}
+                  </label>
+                  {productForm.pricingMode === 'auto' ? (
+                    <input
+                      id="prod-price-input"
+                      type="number"
+                      min="0"
+                      value={productForm.makingChargePerGram}
+                      onChange={(e) =>
+                        setProductForm({
+                          ...productForm,
+                          makingChargePerGram: Number(e.target.value),
+                        })
+                      }
+                      className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
+                    />
+                  ) : (
+                    <input
+                      id="prod-price-input"
+                      type="number"
+                      min="0"
+                      value={productForm.manualPrice}
+                      onChange={(e) =>
+                        setProductForm({ ...productForm, manualPrice: Number(e.target.value) })
+                      }
+                      className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
+                    />
+                  )}
+                </div>
+                <div>
+                  <label htmlFor="prod-discount" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'نسبة الخصم %' : 'Discount %'}
+                  </label>
+                  <input
+                    id="prod-discount"
+                    type="number"
+                    min="0"
+                    max="90"
+                    value={productForm.discountPercent}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, discountPercent: Number(e.target.value) })
+                    }
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="prod-desc-ar" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'وصف المنتج (اختياري)' : 'Description AR (optional)'}
+                  </label>
+                  <input
+                    id="prod-desc-ar"
+                    type="text"
+                    value={productForm.descriptionAr}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, descriptionAr: e.target.value })
+                    }
+                    className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="prod-desc-en" className="block text-xs text-slate-300 mb-1">
+                    {lang === 'ar' ? 'الوصف بالإنجليزية (اختياري)' : 'Description EN (optional)'}
+                  </label>
+                  <input
+                    id="prod-desc-en"
+                    type="text"
+                    value={productForm.descriptionEn}
+                    onChange={(e) =>
+                      setProductForm({ ...productForm, descriptionEn: e.target.value })
+                    }
+                    className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 disabled:opacity-60 cursor-pointer"
+                >
+                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  <span>
+                    {isEditingProduct
+                      ? lang === 'ar'
+                        ? 'حفظ التعديلات ونشرها فوراً'
+                        : 'Save Changes & Publish Live'
+                      : copy.saveAndPublish}
+                  </span>
+                </button>
+                {isEditingProduct && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProductForm(EMPTY_PRODUCT_FORM);
+                      setIsEditingProduct(false);
+                      setCompressedInfo(null);
+                    }}
+                    className="rounded-xl border border-white/15 px-4 text-xs font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </button>
+                )}
+              </div>
+            </form>
+
+            {/* Products Inventory List with Search, Single/Bulk Delete & Restore */}
+            <div className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 lg:col-span-7 space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-base font-bold text-white">
+                  {lang === 'ar'
+                    ? `المنتجات الحالية (${storeData.products.length})`
+                    : `Current Products (${storeData.products.length})`}
+                </h2>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedProductIds.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={handleBulkDeleteSelected}
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-xs font-bold text-rose-200 hover:bg-rose-500/30 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>
+                        {lang === 'ar'
+                          ? `حذف المحدد (${selectedProductIds.length})`
+                          : `Delete Selected (${selectedProductIds.length})`}
+                      </span>
+                    </button>
+                  )}
+
+                  {storeData.products.length > 0 && !confirmClearAll && (
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => setConfirmClearAll(true)}
+                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{lang === 'ar' ? 'حذف الكل' : 'Delete All'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={handleRestoreDefaultProducts}
+                    className="flex items-center gap-1.5 rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 py-1.5 text-xs font-semibold text-amber-200 hover:border-amber-400 disabled:opacity-50 cursor-pointer"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>{lang === 'ar' ? 'استعادة الافتراضي' : 'Restore Defaults'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {confirmClearAll && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2.5 text-xs text-rose-100">
+                  <span className="font-semibold">
+                    {lang === 'ar'
+                      ? 'تأكيد حذف جميع المنتجات من المتجر والسحابة فوراً؟'
+                      : 'Confirm deleting all products from the store & Firebase Cloud immediately?'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleDeleteAllProducts}
+                      className="rounded-lg bg-rose-600 px-3 py-1 font-bold text-white hover:bg-rose-500 cursor-pointer"
+                    >
+                      {lang === 'ar' ? 'نعم، احذف الكل' : 'Yes, Delete All'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearAll(false)}
+                      className="rounded-lg border border-white/20 px-3 py-1 font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer"
+                    >
+                      {lang === 'ar' ? 'تراجع' : 'Cancel'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Search inside Admin Products */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 start-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={adminProductSearch}
+                  onChange={(e) => setAdminProductSearch(e.target.value)}
+                  placeholder={
+                    lang === 'ar'
+                      ? 'ابحث داخل المنتجات بالاسم أو الكود أو العيار...'
+                      : 'Search admin products by name, code, or karat...'
+                  }
+                  aria-label={lang === 'ar' ? 'بحث في منتجات الأدمن' : 'Search admin products'}
+                  className="h-10 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] ps-9 pe-3 text-xs sm:text-sm text-white placeholder:text-slate-500"
+                />
+              </div>
+
+              {filteredAdminProducts.length === 0 ? (
+                <div className="rounded-xl border border-amber-500/15 bg-[#0B0F17] py-10 px-4 text-center text-xs sm:text-sm text-slate-400">
+                  {storeData.products.length === 0
+                    ? lang === 'ar'
+                      ? 'لا توجد منتجات حالياً. أضف أي منتج جديد من النموذج الجانبي ليظهر فوراً لجميع المستخدمين.'
+                      : 'No products currently in catalog. Add any new product using the form to publish live to all users.'
+                    : lang === 'ar'
+                      ? 'لا توجد منتجات مطابقة لعبارة البحث.'
+                      : 'No products match your search query.'}
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-[600px] overflow-y-auto pe-1">
+                  {filteredAdminProducts.map((prod) => {
+                    const price = calculateProductPrice(
+                      prod,
+                      storeData.rates,
+                      storeData.rates.autoLinkPrices
+                    );
+                    const displayTitle = lang === 'ar' ? prod.nameAr : prod.nameEn;
+                    const isChecked = selectedProductIds.includes(prod.id);
+                    const isDeletingThis = deletingProductId === prod.id;
+
+                    return (
+                      <div
+                        key={prod.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/15 bg-[#0B0F17] p-3"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedProductIds((prev) => [...prev, prod.id]);
+                              } else {
+                                setSelectedProductIds((prev) =>
+                                  prev.filter((item) => item !== prod.id)
+                                );
+                              }
+                            }}
+                            aria-label={
+                              lang === 'ar'
+                                ? `تحديد ${displayTitle}`
+                                : `Select ${displayTitle}`
+                            }
+                            className="h-4 w-4 shrink-0 accent-amber-500 cursor-pointer"
+                          />
+                          <img
+                            src={prod.imageUrl}
+                            alt={displayTitle}
+                            className="h-14 w-14 rounded-lg object-cover shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-white truncate">
+                              {displayTitle}
+                            </div>
+                            <div className="text-xs text-slate-400 font-mono-tabular">
+                              {prod.code} · {lang === 'ar' ? `عيار ${prod.karat}` : `${prod.karat}K`} ·{' '}
+                              {prod.weightGrams} {copy.gram} ·{' '}
+                              <span className="text-amber-300 font-bold">
+                                {formatCurrency(price.finalPrice, lang)}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-400 font-mono-tabular">
-                          {prod.code} · عيار {prod.karat} · {prod.weightGrams} جم ·{' '}
-                          <span className="text-amber-300 font-bold">
-                            {formatCurrency(price.finalPrice, lang)}
-                          </span>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProductForm({
+                                ...prod,
+                                descriptionAr: prod.descriptionAr || '',
+                                descriptionEn: prod.descriptionEn || '',
+                              });
+                              setIsEditingProduct(true);
+                            }}
+                            aria-label={
+                              lang === 'ar'
+                                ? `تعديل ${displayTitle}`
+                                : `Edit ${displayTitle}`
+                            }
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-500/25 text-amber-300 hover:bg-amber-500/15 cursor-pointer"
+                          >
+                            <Edit3 className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isDeletingThis}
+                            onClick={() => handleDeleteProduct(prod.id)}
+                            aria-label={
+                              lang === 'ar'
+                                ? `حذف ${displayTitle}`
+                                : `Delete ${displayTitle}`
+                            }
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-500/25 text-rose-400 hover:bg-rose-500/15 disabled:opacity-50 cursor-pointer"
+                          >
+                            {isDeletingThis ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </button>
                         </div>
                       </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setProductForm({
-                            ...prod,
-                            descriptionAr: prod.descriptionAr || '',
-                            descriptionEn: prod.descriptionEn || '',
-                          });
-                          setIsEditingProduct(true);
-                        }}
-                        aria-label={`تعديل ${prod.nameAr}`}
-                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-500/25 text-amber-300 hover:bg-amber-500/15 cursor-pointer"
-                      >
-                        <Edit3 className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteProduct(prod.id)}
-                        aria-label={`حذف ${prod.nameAr}`}
-                        className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-500/25 text-rose-400 hover:bg-rose-500/15 cursor-pointer"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

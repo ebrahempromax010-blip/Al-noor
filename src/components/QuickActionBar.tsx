@@ -12,7 +12,7 @@ import { t } from '../utils/i18n';
 
 interface QuickActionBarProps {
   lang: Language;
-  activeView: 'store' | 'categories' | 'prices' | 'admin';
+  activeView: 'store' | 'categories' | 'prices' | 'favorites' | 'admin';
   isRefreshingMarket: boolean;
   isSyncingFirefox: boolean;
   onOpenCategories: () => void;

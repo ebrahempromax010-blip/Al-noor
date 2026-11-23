@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Gem, MessageCircle, ShoppingBag, ZoomIn } from 'lucide-react';
+import { Check, Gem, Heart, MessageCircle, ShoppingBag, ZoomIn } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Language, MarketRates, Product } from '../types/store';
 import { t } from '../utils/i18n';
@@ -14,6 +14,8 @@ interface ProductCardProps {
   rates: MarketRates;
   lang: Language;
   whatsappNumber: string;
+  isFavorite?: boolean;
+  onToggleFavorite?: (productId: string) => void;
   onAddToCart: (productId: string) => void;
   onZoom: (product: Product) => void;
   index: number;
@@ -24,6 +26,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   rates,
   lang,
   whatsappNumber,
+  isFavorite = false,
+  onToggleFavorite,
   onAddToCart,
   onZoom,
   index,
@@ -102,6 +106,34 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <span className="pointer-events-none absolute top-3 end-3 animate-pulse rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 px-2.5 py-1 text-[11px] font-bold text-white shadow-md">
             {copy.discountTag} {product.discountPercent}%
           </span>
+        )}
+
+        {/* Wishlist Heart Toggle Button */}
+        {onToggleFavorite && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite(product.id);
+            }}
+            aria-pressed={isFavorite}
+            aria-label={
+              isFavorite
+                ? `${copy.removeFromFavorites}: ${name}`
+                : `${copy.addToFavorites}: ${name}`
+            }
+            className={`absolute bottom-2.5 start-2.5 z-10 flex h-9 w-9 items-center justify-center rounded-xl border backdrop-blur-sm transition active:scale-90 cursor-pointer ${
+              isFavorite
+                ? 'border-rose-400/70 bg-rose-500/25 text-rose-400 shadow-lg shadow-rose-950/40'
+                : 'border-amber-500/30 bg-[#0B0F17]/80 text-slate-200 hover:border-rose-400/60 hover:text-rose-400'
+            }`}
+          >
+            <Heart
+              className={`h-4 w-4 transition-transform ${
+                isFavorite ? 'fill-rose-500 text-rose-500 scale-110' : ''
+              }`}
+            />
+          </button>
         )}
       </div>
 

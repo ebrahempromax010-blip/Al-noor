@@ -9,6 +9,8 @@ interface CategoriesGroupViewProps {
   products: Product[];
   rates: MarketRates;
   whatsappNumber: string;
+  wishlistIds: string[];
+  onToggleFavorite: (productId: string) => void;
   onAddToCart: (productId: string) => void;
   onZoom: (product: Product) => void;
   onFilterInStore: (categoryId: string) => void;
@@ -20,6 +22,8 @@ export const CategoriesGroupView: React.FC<CategoriesGroupViewProps> = ({
   products,
   rates,
   whatsappNumber,
+  wishlistIds,
+  onToggleFavorite,
   onAddToCart,
   onZoom,
   onFilterInStore,
@@ -113,6 +117,8 @@ export const CategoriesGroupView: React.FC<CategoriesGroupViewProps> = ({
                   rates={rates}
                   lang={lang}
                   whatsappNumber={whatsappNumber}
+                  isFavorite={wishlistIds.includes(product.id)}
+                  onToggleFavorite={onToggleFavorite}
                   onAddToCart={onAddToCart}
                   onZoom={onZoom}
                   index={idx}

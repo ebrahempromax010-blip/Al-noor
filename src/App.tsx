@@ -13,7 +13,13 @@ import {
 } from './types/store';
 import { t } from './utils/i18n';
 import { fetchGlobalSpotRates } from './utils/marketApi';
-import { calculateCartSummary, filterProducts } from './utils/storeLogic';
+import {
+  calculateCartSummary,
+  filterProducts,
+  getWishlistProducts,
+  sanitizeForFirestore,
+  toggleWishlistItem,
+} from './utils/storeLogic';
 import { Header } from './components/Header';
 import { LiveTickerBar } from './components/LiveTickerBar';
 import { QuickActionBar } from './components/QuickActionBar';
@@ -27,6 +33,7 @@ import { CartDrawer } from './components/CartDrawer';
 import { AdminPinModal } from './components/AdminPinModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { CategoriesGroupView } from './components/CategoriesGroupView';
+import { FavoritesView } from './components/FavoritesView';
 import { LivePricesPage } from './components/LivePricesPage';
 import { LanguageSettingsModal } from './components/LanguageSettingsModal';
 import { OfflineIndicator } from './components/PWAComponents';
@@ -40,18 +47,25 @@ export default function App() {
   const hasManualLangChoice = useRef(false);
 
   const [storeData, setStoreData] = useState<StoreData>(DEFAULT_STORE_DATA);
+  const latestStoreDataRef = useRef<StoreData>(DEFAULT_STORE_DATA);
+  const writeQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('connecting');
   const [cloudError, setCloudError] = useState<string | null>(null);
+
+  useEffect(() => {
+    latestStoreDataRef.current = storeData;
+  }, [storeData]);
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [wishlistIds, setWishlistIds] = useState<string[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isLangModalOpen, setIsLangModalOpen] = useState(false);
   const [zoomedProduct, setZoomedProduct] = useState<Product | null>(null);
 
   const [activeView, setActiveView] = useState<
-    'store' | 'categories' | 'prices' | 'admin'
+    'store' | 'categories' | 'prices' | 'favorites' | 'admin'
   >('store');
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
@@ -144,25 +158,70 @@ export default function App() {
 
   const saveStoreToCloud = async (
     nextData: StoreData
-  ): Promise<{ ok: boolean; error?: string }> => {
-    setSyncStatus('saving');
-    setCloudError(null);
-    broadcastToTabs(nextData);
-    try {
-      const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-      await setDoc(storeDocRef, nextData, { merge: true });
+  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
+    const task = async (): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
+      const sanitized = sanitizeForFirestore({
+        ...nextData,
+        updatedAt: new Date().toISOString(),
+      });
+      setSyncStatus('saving');
+      setCloudError(null);
+      latestStoreDataRef.current = sanitized;
+      setStoreData(sanitized);
+      broadcastToTabs(sanitized);
+      try {
+        const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
+        await setDoc(storeDocRef, sanitized, { merge: true });
+        setSyncStatus('synced');
+        return { ok: true, data: sanitized };
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? `فشل الحفظ السحابي في Firebase: ${err.message}`
+            : 'حدث خطأ غير متوقع أثناء الحفظ في Firebase.';
+        setSyncStatus('error');
+        setCloudError(msg);
+        return { ok: false, error: msg };
+      }
+    };
+
+    const queued = writeQueueRef.current.then(task, task);
+    writeQueueRef.current = queued;
+    return queued;
+  };
+
+  const updateStoreAndPublish = (
+    updater: (latest: StoreData) => StoreData
+  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
+    const task = async (): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
+      const nextData = sanitizeForFirestore({
+        ...updater(latestStoreDataRef.current),
+        updatedAt: new Date().toISOString(),
+      });
+      setSyncStatus('saving');
+      setCloudError(null);
+      latestStoreDataRef.current = nextData;
       setStoreData(nextData);
-      setSyncStatus('synced');
-      return { ok: true };
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? `فشل الحفظ السحابي في Firebase: ${err.message}`
-          : 'حدث خطأ غير متوقع أثناء الحفظ في Firebase.';
-      setSyncStatus('error');
-      setCloudError(msg);
-      return { ok: false, error: msg };
-    }
+      broadcastToTabs(nextData);
+      try {
+        const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
+        await setDoc(storeDocRef, nextData, { merge: true });
+        setSyncStatus('synced');
+        return { ok: true, data: nextData };
+      } catch (err) {
+        const msg =
+          err instanceof Error
+            ? `فشل الحفظ السحابي في Firebase: ${err.message}`
+            : 'حدث خطأ غير متوقع أثناء الحفظ في Firebase.';
+        setSyncStatus('error');
+        setCloudError(msg);
+        return { ok: false, error: msg };
+      }
+    };
+
+    const queued = writeQueueRef.current.then(task, task);
+    writeQueueRef.current = queued;
+    return queued;
   };
 
   const fetchLatestFromFirebase = async (): Promise<{
@@ -265,6 +324,11 @@ export default function App() {
     [storeData.products, activeCategory, searchQuery]
   );
 
+  const wishlistProducts = useMemo(
+    () => getWishlistProducts(storeData.products, wishlistIds),
+    [storeData.products, wishlistIds]
+  );
+
   const cartSummary = useMemo(
     () =>
       calculateCartSummary(
@@ -275,6 +339,10 @@ export default function App() {
       ),
     [cart, storeData.products, storeData.rates]
   );
+
+  const handleToggleFavorite = (productId: string) => {
+    setWishlistIds((prev) => toggleWishlistItem(prev, productId));
+  };
 
   const handleAddToCart = (productId: string) => {
     setCart((prev) => {
@@ -382,6 +450,7 @@ export default function App() {
             cloudError={cloudError}
             isRefreshingMarket={isRefreshingMarket}
             onSaveStoreData={saveStoreToCloud}
+            onUpdateStoreData={updateStoreAndPublish}
             onFetchFromFirebase={fetchLatestFromFirebase}
             onRefreshMarketRates={handleRefreshMarket}
             onExitAdmin={() => setActiveView('store')}
@@ -394,6 +463,8 @@ export default function App() {
             products={storeData.products}
             rates={storeData.rates}
             whatsappNumber={storeData.branch.whatsappNumber}
+            wishlistIds={wishlistIds}
+            onToggleFavorite={handleToggleFavorite}
             onAddToCart={handleAddToCart}
             onZoom={setZoomedProduct}
             onFilterInStore={(catId) => {
@@ -401,6 +472,23 @@ export default function App() {
               setActiveView('store');
               window.scrollTo({ top: 0 });
             }}
+            onBackToStore={() => {
+              setActiveView('store');
+              window.scrollTo({ top: 0 });
+            }}
+          />
+        </main>
+      ) : activeView === 'favorites' ? (
+        <main>
+          <FavoritesView
+            lang={lang}
+            favoriteProducts={wishlistProducts}
+            rates={storeData.rates}
+            whatsappNumber={storeData.branch.whatsappNumber}
+            onToggleFavorite={handleToggleFavorite}
+            onClearFavorites={() => setWishlistIds([])}
+            onAddToCart={handleAddToCart}
+            onZoom={setZoomedProduct}
             onBackToStore={() => {
               setActiveView('store');
               window.scrollTo({ top: 0 });
@@ -473,6 +561,8 @@ export default function App() {
                     rates={storeData.rates}
                     lang={lang}
                     whatsappNumber={storeData.branch.whatsappNumber}
+                    isFavorite={wishlistIds.includes(product.id)}
+                    onToggleFavorite={handleToggleFavorite}
                     onAddToCart={handleAddToCart}
                     onZoom={setZoomedProduct}
                     index={index}
@@ -489,10 +579,15 @@ export default function App() {
       <BottomNavBar
         lang={lang}
         cartCount={cartSummary.totalItems}
+        wishlistCount={wishlistProducts.length}
         activeView={activeView}
         onGoStore={() => {
           setActiveView('store');
           window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onGoFavorites={() => {
+          setActiveView('favorites');
+          window.scrollTo({ top: 0 });
         }}
         onOpenCart={() => setIsCartOpen(true)}
         onOpenAdmin={() => {
@@ -531,6 +626,8 @@ export default function App() {
         rates={storeData.rates}
         lang={lang}
         whatsappNumber={storeData.branch.whatsappNumber}
+        isFavorite={zoomedProduct ? wishlistIds.includes(zoomedProduct.id) : false}
+        onToggleFavorite={handleToggleFavorite}
         onClose={() => setZoomedProduct(null)}
         onAddToCart={handleAddToCart}
       />

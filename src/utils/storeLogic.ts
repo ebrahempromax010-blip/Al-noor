@@ -307,3 +307,56 @@ export function validateStoreBackup(rawJson: string): { ok: true; data: StoreDat
     };
   }
 }
+
+export function sanitizeForFirestore<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (val !== undefined) {
+        out[key] = sanitizeForFirestore(val);
+      }
+    }
+    return out as T;
+  }
+  return value;
+}
+
+export function upsertProductList(
+  products: Product[],
+  product: Product,
+  isEdit: boolean
+): Product[] {
+  if (isEdit) {
+    const exists = products.some((p) => p.id === product.id);
+    if (exists) {
+      return products.map((p) => (p.id === product.id ? product : p));
+    }
+  }
+  return [product, ...products];
+}
+
+export function removeProductsByIds(products: Product[], ids: string[]): Product[] {
+  const idSet = new Set(ids);
+  return products.filter((p) => !idSet.has(p.id));
+}
+
+export function filterAdminProducts(products: Product[], query: string): Product[] {
+  return filterProducts(products, 'all', query);
+}
+
+export function toggleWishlistItem(wishlistIds: string[], productId: string): string[] {
+  if (wishlistIds.includes(productId)) {
+    return wishlistIds.filter((id) => id !== productId);
+  }
+  return [...wishlistIds, productId];
+}
+
+export function getWishlistProducts(products: Product[], wishlistIds: string[]): Product[] {
+  const idSet = new Set(wishlistIds);
+  return products.filter((p) => idSet.has(p.id));
+}
+
+

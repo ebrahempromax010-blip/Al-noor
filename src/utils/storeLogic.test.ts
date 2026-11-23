@@ -8,7 +8,13 @@ import {
   calculateProductPrice,
   computeDiamondPrices,
   computeRatesFromSpot,
+  filterAdminProducts,
   filterProducts,
+  getWishlistProducts,
+  removeProductsByIds,
+  sanitizeForFirestore,
+  toggleWishlistItem,
+  upsertProductList,
   validateStoreBackup,
 } from './storeLogic';
 import { DEFAULT_STORE_DATA } from '../data/defaultStoreData';
@@ -133,3 +139,81 @@ test('computeDiamondPrices scales 1ct, 0.5ct, and 0.25ct dynamically with USD/EG
   assert.equal(d.halfCaratEgp, 84000);
   assert.equal(d.quarterCaratEgp, 38000);
 });
+
+test('upsertProductList and removeProductsByIds allow unlimited additions, edits, and deletions', () => {
+  let list = [...DEFAULT_STORE_DATA.products];
+  const initialCount = list.length;
+
+  // Add 15 products consecutively (no daily or total limit)
+  for (let i = 1; i <= 15; i += 1) {
+    list = upsertProductList(
+      list,
+      {
+        ...DEFAULT_STORE_DATA.products[0],
+        id: `custom-${i}`,
+        code: `AG-C${i}`,
+        nameAr: `منتج مخصص ${i}`,
+        nameEn: `Custom Product ${i}`,
+      },
+      false
+    );
+  }
+  assert.equal(list.length, initialCount + 15);
+  assert.equal(list[0].id, 'custom-15');
+
+  // Edit one
+  list = upsertProductList(
+    list,
+    { ...list[0], nameEn: 'Custom Product 15 Edited' },
+    true
+  );
+  assert.equal(list.length, initialCount + 15);
+  assert.equal(list[0].nameEn, 'Custom Product 15 Edited');
+
+  // Delete single and multiple
+  list = removeProductsByIds(list, ['custom-15', 'custom-14', 'custom-13']);
+  assert.equal(list.length, initialCount + 12);
+  assert.equal(filterAdminProducts(list, 'AG-C15').length, 0);
+  assert.equal(filterAdminProducts(list, 'AG-C12').length, 1);
+});
+
+test('sanitizeForFirestore recursively removes undefined fields', () => {
+  const dirty = {
+    a: 1,
+    b: undefined,
+    nested: { ok: 'yes', drop: undefined },
+    arr: [{ x: 10, y: undefined }],
+  };
+  const clean = sanitizeForFirestore(dirty);
+  assert.deepEqual(clean, {
+    a: 1,
+    nested: { ok: 'yes' },
+    arr: [{ x: 10 }],
+  });
+  assert.equal('b' in clean, false);
+  assert.equal('drop' in clean.nested, false);
+});
+
+test('toggleWishlistItem toggles product presence and getWishlistProducts resolves matching items', () => {
+  const initial: string[] = [];
+  const p1 = DEFAULT_STORE_DATA.products[0].id;
+  const p2 = DEFAULT_STORE_DATA.products[2].id;
+
+  const addedOne = toggleWishlistItem(initial, p1);
+  assert.deepEqual(addedOne, [p1]);
+  assert.deepEqual(initial, []); // Pure, non-mutating
+
+  const addedTwo = toggleWishlistItem(addedOne, p2);
+  assert.deepEqual(addedTwo, [p1, p2]);
+
+  const savedProducts = getWishlistProducts(DEFAULT_STORE_DATA.products, addedTwo);
+  assert.equal(savedProducts.length, 2);
+  assert.equal(savedProducts[0].id, p1);
+  assert.equal(savedProducts[1].id, p2);
+
+  const removedOne = toggleWishlistItem(addedTwo, p1);
+  assert.deepEqual(removedOne, [p2]);
+  assert.equal(getWishlistProducts(DEFAULT_STORE_DATA.products, removedOne).length, 1);
+});
+
+

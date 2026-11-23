@@ -1,0 +1,6 @@
+{
+  "name": "أشرف جولد | Ashraf Gold — مجوهرات وساعات فاخرة",
+  "description": "منصة ومتجر أشرف جولد للمجوهرات الذهبية والفضية والساعات الفاخرة مع أسعار البورصة الحية والمزامنة السحابية الفورية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

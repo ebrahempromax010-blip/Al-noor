@@ -5,6 +5,7 @@ import {
   MarketRates,
   Product,
   StoreData,
+  WebsitePresetIcon,
 } from '../types/store';
 
 export const ADMIN_SECRET_PIN = '8492710536';
@@ -202,14 +203,17 @@ export function buildWhatsAppProductUrl(
   whatsappNumber: string,
   product: Product,
   finalPrice: number,
-  lang: Language
+  lang: Language,
+  storeName?: string
 ): string {
   const cleanPhone = sanitizePhoneForWhatsApp(whatsappNumber);
   const name = lang === 'ar' ? product.nameAr : product.nameEn;
+  const resolvedBrand =
+    (storeName || '').trim() || (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold');
   const message =
     lang === 'ar'
-      ? `مرحباً أشرف جولد، أرغب في طلب المنتج:\n• ${name}\n• الكود: ${product.code}\n• العيار: ${product.karat}\n• الوزن: ${product.weightGrams} جم\n• السعر المعروض: ${finalPrice.toLocaleString('en-US')} ج.م`
-      : `Hello Ashraf Gold, I would like to order:\n• ${name}\n• Code: ${product.code}\n• Karat: ${product.karat}\n• Weight: ${product.weightGrams} g\n• Listed Price: ${finalPrice.toLocaleString('en-US')} EGP`;
+      ? `مرحباً ${resolvedBrand}، أرغب في طلب المنتج:\n• ${name}\n• الكود: ${product.code}\n• العيار: ${product.karat}\n• الوزن: ${product.weightGrams} جم\n• السعر المعروض: ${finalPrice.toLocaleString('en-US')} ج.م`
+      : `Hello ${resolvedBrand}, I would like to order:\n• ${name}\n• Code: ${product.code}\n• Karat: ${product.karat}\n• Weight: ${product.weightGrams} g\n• Listed Price: ${finalPrice.toLocaleString('en-US')} EGP`;
 
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
 }
@@ -309,19 +313,41 @@ export function validateStoreBackup(rawJson: string): { ok: true; data: StoreDat
 }
 
 export function sanitizeForFirestore<T>(value: T): T {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return null as unknown as T;
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    return 0 as unknown as T;
+  }
+  if (value instanceof Date) {
+    return value.toISOString() as unknown as T;
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeForFirestore(item)) as unknown as T;
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (val !== undefined) {
-        out[key] = sanitizeForFirestore(val);
-      }
+      out[key] = sanitizeForFirestore(val);
     }
     return out as T;
   }
   return value;
+}
+
+export function reorderItems<T>(
+  items: T[],
+  index: number,
+  direction: 'up' | 'down'
+): T[] {
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || index >= items.length || targetIndex < 0 || targetIndex >= items.length) {
+    return items;
+  }
+  const copy = [...items];
+  const [moved] = copy.splice(index, 1);
+  copy.splice(targetIndex, 0, moved);
+  return copy;
 }
 
 export function upsertProductList(
@@ -357,6 +383,131 @@ export function toggleWishlistItem(wishlistIds: string[], productId: string): st
 export function getWishlistProducts(products: Product[], wishlistIds: string[]): Product[] {
   const idSet = new Set(wishlistIds);
   return products.filter((p) => idSet.has(p.id));
+}
+
+export const DEFAULT_WEBSITE_URL = 'https://ashraf-gold.web.app';
+
+export function normalizeWebsiteUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return '';
+
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith('javascript:') ||
+    lower.startsWith('data:') ||
+    lower.startsWith('vbscript:') ||
+    lower.startsWith('file:')
+  ) {
+    return '';
+  }
+
+  const candidate = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : trimmed.includes('://')
+      ? ''
+      : `https://${trimmed}`;
+
+  if (!candidate) return '';
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    if (!parsed.hostname || !parsed.hostname.includes('.')) {
+      return '';
+    }
+    return parsed.toString().replace(/\/$/, '') === `${parsed.protocol}//${parsed.host}` &&
+      !trimmed.endsWith('/')
+      ? `${parsed.protocol}//${parsed.host}`
+      : parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+export function sanitizeIconUrl(rawIcon: string): string {
+  const trimmed = (rawIcon || '').trim();
+  if (!trimmed) return '';
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.startsWith('javascript:') ||
+    lower.startsWith('vbscript:') ||
+    lower.startsWith('file:')
+  ) {
+    return '';
+  }
+  if (
+    lower.startsWith('data:image/png;') ||
+    lower.startsWith('data:image/jpeg;') ||
+    lower.startsWith('data:image/jpg;') ||
+    lower.startsWith('data:image/webp;') ||
+    lower.startsWith('data:image/gif;') ||
+    lower.startsWith('data:image/x-icon;') ||
+    lower.startsWith('data:image/svg+xml;')
+  ) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export function getPresetFaviconDataUri(presetIcon: WebsitePresetIcon): string {
+  if (presetIcon === 'crown') {
+    return '/icon.svg';
+  }
+  const pathByPreset: Record<Exclude<WebsitePresetIcon, 'crown'>, string> = {
+    gem: '<path d="M16 14h32l10 14-26 30L6 28l10-14z" fill="none" stroke="#FBBF24" stroke-width="4" stroke-linejoin="round"/><path d="M6 28h52M22 14l10 44 10-44" fill="none" stroke="#F59E0B" stroke-width="3" stroke-linejoin="round"/>',
+    sparkles: '<path d="M32 8l5 15 15 5-15 5-5 15-5-15-15-5 15-5 5-15z" fill="#FBBF24"/><path d="M50 42l2.5 6.5L59 51l-6.5 2.5L50 60l-2.5-6.5L41 51l6.5-2.5L50 42z" fill="#FDE68A"/>',
+    star: '<path d="M32 8l7.2 14.6L55 25l-11.5 11.2L46.2 52 32 44.5 17.8 52l2.7-15.8L9 25l15.8-2.4L32 8z" fill="#FBBF24" stroke="#F59E0B" stroke-width="2" stroke-linejoin="round"/>',
+  };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#0B0F17" stroke="#D4AF37" stroke-width="3"/>${pathByPreset[presetIcon]}</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+export interface EffectiveSiteIdentity {
+  name: string;
+  url: string;
+  iconUrl: string;
+  presetIcon: WebsitePresetIcon;
+  faviconHref: string;
+}
+
+export function getEffectiveSiteIdentity(
+  storeData: StoreData,
+  lang: Language
+): EffectiveSiteIdentity {
+  const branch = storeData.branch;
+  const rawName = lang === 'ar' ? branch.storeNameAr : branch.storeNameEn;
+  const fallbackName = lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold';
+  const name = (rawName || '').trim() || fallbackName;
+  const url = normalizeWebsiteUrl(branch.websiteUrl || '') || DEFAULT_WEBSITE_URL;
+  const iconUrl = sanitizeIconUrl(branch.websiteIconUrl || '');
+  const presetIcon: WebsitePresetIcon =
+    branch.websitePresetIcon === 'gem' ||
+    branch.websitePresetIcon === 'sparkles' ||
+    branch.websitePresetIcon === 'star'
+      ? branch.websitePresetIcon
+      : 'crown';
+  const faviconHref = iconUrl || getPresetFaviconDataUri(presetIcon);
+
+  return {
+    name,
+    url,
+    iconUrl,
+    presetIcon,
+    faviconHref,
+  };
 }
 
 

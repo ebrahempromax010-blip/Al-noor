@@ -142,6 +142,9 @@ export const DEFAULT_STORE_DATA: StoreData = {
   branch: {
     storeNameAr: 'أشرف جولد',
     storeNameEn: 'Ashraf Gold',
+    websiteUrl: 'https://ashraf-gold.web.app',
+    websiteIconUrl: '',
+    websitePresetIcon: 'crown',
     addressAr: 'الصاغة، خان الخليلي، القاهرة - جمهورية مصر العربية',
     addressEn: 'El-Sagha, Khan El-Khalili, Cairo, Egypt',
     whatsappNumber: '201000000000',
@@ -149,5 +152,6 @@ export const DEFAULT_STORE_DATA: StoreData = {
     workingHoursAr: 'يومياً من 11:00 صباحاً حتى 11:00 مساءً',
     workingHoursEn: 'Daily from 11:00 AM to 11:00 PM',
   },
+  defaultLanguage: 'ar',
   updatedAt: new Date().toISOString(),
 };

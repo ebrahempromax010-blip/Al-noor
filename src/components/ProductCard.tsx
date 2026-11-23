@@ -14,6 +14,7 @@ interface ProductCardProps {
   rates: MarketRates;
   lang: Language;
   whatsappNumber: string;
+  storeName?: string;
   isFavorite?: boolean;
   onToggleFavorite?: (productId: string) => void;
   onAddToCart: (productId: string) => void;
@@ -26,6 +27,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   rates,
   lang,
   whatsappNumber,
+  storeName,
   isFavorite = false,
   onToggleFavorite,
   onAddToCart,
@@ -47,7 +49,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     whatsappNumber,
     product,
     price.finalPrice,
-    lang
+    lang,
+    storeName
   );
 
   const handleAdd = () => {

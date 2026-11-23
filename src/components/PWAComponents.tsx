@@ -4,10 +4,15 @@ import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
 import { Language } from '../types/store';
 import { t } from '../utils/i18n';
 
-export const PWAInstallButton: React.FC<{ lang: Language }> = ({ lang }) => {
+export const PWAInstallButton: React.FC<{ lang: Language; storeName?: string }> = ({
+  lang,
+  storeName,
+}) => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const [showIOSGuide, setShowIOSGuide] = useState(false);
   const copy = t(lang);
+  const resolvedName =
+    (storeName || '').trim() || (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold');
 
   if (isInstalled) return null;
 
@@ -42,7 +47,9 @@ export const PWAInstallButton: React.FC<{ lang: Language }> = ({ lang }) => {
             <div className="w-full max-w-sm rounded-2xl border border-amber-500/25 bg-[#131A26] p-6 text-slate-100 shadow-2xl">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-amber-300">
-                  {lang === 'ar' ? 'تثبيت تطبيق أشرف جولد' : 'Install Ashraf Gold App'}
+                  {lang === 'ar'
+                    ? `تثبيت تطبيق ${resolvedName}`
+                    : `Install ${resolvedName} App`}
                 </h3>
                 <button
                   type="button"

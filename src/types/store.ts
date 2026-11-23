@@ -59,9 +59,14 @@ export interface PromoBannerConfig {
   imageUrl: string;
 }
 
+export type WebsitePresetIcon = 'crown' | 'gem' | 'sparkles' | 'star';
+
 export interface BranchInfo {
   storeNameAr: string;
   storeNameEn: string;
+  websiteUrl?: string;
+  websiteIconUrl?: string;
+  websitePresetIcon?: WebsitePresetIcon;
   addressAr: string;
   addressEn: string;
   whatsappNumber: string;

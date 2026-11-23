@@ -13,6 +13,7 @@ interface ProductZoomModalProps {
   rates: MarketRates;
   lang: Language;
   whatsappNumber: string;
+  storeName?: string;
   isFavorite?: boolean;
   onToggleFavorite?: (productId: string) => void;
   onClose: () => void;
@@ -24,6 +25,7 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
   rates,
   lang,
   whatsappNumber,
+  storeName,
   isFavorite = false,
   onToggleFavorite,
   onClose,
@@ -41,7 +43,8 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
     whatsappNumber,
     product,
     price.finalPrice,
-    lang
+    lang,
+    storeName
   );
 
   return (

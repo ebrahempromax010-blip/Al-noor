@@ -10,15 +10,19 @@ import {
   computeRatesFromSpot,
   filterAdminProducts,
   filterProducts,
+  getEffectiveSiteIdentity,
   getWishlistProducts,
+  normalizeWebsiteUrl,
   removeProductsByIds,
+  reorderItems,
   sanitizeForFirestore,
+  sanitizeIconUrl,
   toggleWishlistItem,
   upsertProductList,
   validateStoreBackup,
 } from './storeLogic';
 import { DEFAULT_STORE_DATA } from '../data/defaultStoreData';
-import { Product } from '../types/store';
+import { Product, StoreData } from '../types/store';
 
 test('admin pin matches required secret code', () => {
   assert.equal(ADMIN_SECRET_PIN, '8492710536');
@@ -114,6 +118,15 @@ test('WhatsApp URL builders encode product and invoice text cleanly', () => {
   const url = buildWhatsAppProductUrl('01012345678', DEFAULT_STORE_DATA.products[0], 120000, 'ar');
   assert.ok(url.startsWith('https://wa.me/201012345678?text='));
 
+  const brandedUrl = buildWhatsAppProductUrl(
+    '01012345678',
+    DEFAULT_STORE_DATA.products[0],
+    120000,
+    'en',
+    'Palace Gold'
+  );
+  assert.ok(decodeURIComponent(brandedUrl).includes('Hello Palace Gold'));
+
   const summary = calculateCartSummary(
     [{ productId: DEFAULT_STORE_DATA.products[0].id, quantity: 1 }],
     DEFAULT_STORE_DATA.products,
@@ -177,21 +190,34 @@ test('upsertProductList and removeProductsByIds allow unlimited additions, edits
   assert.equal(filterAdminProducts(list, 'AG-C12').length, 1);
 });
 
-test('sanitizeForFirestore recursively removes undefined fields', () => {
+test('sanitizeForFirestore converts undefined, functions, and NaN to null or safe defaults across objects and arrays', () => {
   const dirty = {
     a: 1,
     b: undefined,
+    fn: () => 'ignored',
+    badNum: Number.NaN,
     nested: { ok: 'yes', drop: undefined },
-    arr: [{ x: 10, y: undefined }],
+    arr: [{ x: 10, y: undefined }, undefined, () => 42],
   };
   const clean = sanitizeForFirestore(dirty);
   assert.deepEqual(clean, {
     a: 1,
-    nested: { ok: 'yes' },
-    arr: [{ x: 10 }],
+    b: null,
+    fn: null,
+    badNum: 0,
+    nested: { ok: 'yes', drop: null },
+    arr: [{ x: 10, y: null }, null, null],
   });
-  assert.equal('b' in clean, false);
-  assert.equal('drop' in clean.nested, false);
+  assert.equal(JSON.stringify(clean).includes('undefined'), false);
+});
+
+test('reorderItems moves elements up and down immutably within bounds', () => {
+  const arr = ['p1', 'p2', 'p3'];
+  assert.deepEqual(reorderItems(arr, 1, 'up'), ['p2', 'p1', 'p3']);
+  assert.deepEqual(reorderItems(arr, 1, 'down'), ['p1', 'p3', 'p2']);
+  assert.deepEqual(reorderItems(arr, 0, 'up'), ['p1', 'p2', 'p3']);
+  assert.deepEqual(reorderItems(arr, 2, 'down'), ['p1', 'p2', 'p3']);
+  assert.deepEqual(arr, ['p1', 'p2', 'p3']);
 });
 
 test('toggleWishlistItem toggles product presence and getWishlistProducts resolves matching items', () => {
@@ -215,5 +241,40 @@ test('toggleWishlistItem toggles product presence and getWishlistProducts resolv
   assert.deepEqual(removedOne, [p2]);
   assert.equal(getWishlistProducts(DEFAULT_STORE_DATA.products, removedOne).length, 1);
 });
+
+test('normalizeWebsiteUrl, sanitizeIconUrl, and getEffectiveSiteIdentity validate and resolve branding safely', () => {
+  assert.equal(normalizeWebsiteUrl('ashrafgold.com'), 'https://ashrafgold.com');
+  assert.equal(normalizeWebsiteUrl('https://shop.ashrafgold.com/gold'), 'https://shop.ashrafgold.com/gold');
+  assert.equal(normalizeWebsiteUrl('javascript:alert(1)'), '');
+  assert.equal(normalizeWebsiteUrl('data:text/html,evil'), '');
+  assert.equal(normalizeWebsiteUrl('not a url'), '');
+
+  assert.equal(sanitizeIconUrl('javascript:alert(1)'), '');
+  assert.equal(sanitizeIconUrl('/icon.svg'), '/icon.svg');
+  assert.equal(sanitizeIconUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA');
+  assert.equal(sanitizeIconUrl('https://cdn.example.com/logo.png'), 'https://cdn.example.com/logo.png');
+
+  const customized: StoreData = {
+    ...DEFAULT_STORE_DATA,
+    branch: {
+      ...DEFAULT_STORE_DATA.branch,
+      storeNameAr: 'تاج الصاغة',
+      storeNameEn: 'Crown Sagha',
+      websiteUrl: 'crownsagha.com',
+      websiteIconUrl: '',
+      websitePresetIcon: 'gem',
+    },
+  };
+
+  const arIdentity = getEffectiveSiteIdentity(customized, 'ar');
+  assert.equal(arIdentity.name, 'تاج الصاغة');
+  assert.equal(arIdentity.url, 'https://crownsagha.com');
+  assert.equal(arIdentity.presetIcon, 'gem');
+  assert.ok(arIdentity.faviconHref.startsWith('data:image/svg+xml;utf8,'));
+
+  const enIdentity = getEffectiveSiteIdentity(customized, 'en');
+  assert.equal(enIdentity.name, 'Crown Sagha');
+});
+
 
 

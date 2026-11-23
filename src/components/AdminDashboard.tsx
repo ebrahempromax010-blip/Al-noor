@@ -1,13 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle2,
   CloudDownload,
+  Crown,
   Download,
   Edit3,
   FolderKanban,
+  Gem,
+  Globe,
   ImagePlus,
   Infinity as InfinityIcon,
+  Link2,
   Loader2,
   MapPin,
   Package,
@@ -17,6 +23,7 @@ import {
   Save,
   Search,
   Sparkles,
+  Star,
   Trash2,
   TrendingUp,
   Upload,
@@ -35,14 +42,19 @@ import {
   Product,
   PromoBannerConfig,
   StoreData,
+  WebsitePresetIcon,
 } from '../types/store';
 import { t } from '../utils/i18n';
 import { compressImageToUnder120KB } from '../utils/imageCompressor';
 import {
   calculateProductPrice,
+  DEFAULT_WEBSITE_URL,
   filterAdminProducts,
   formatCurrency,
+  normalizeWebsiteUrl,
   removeProductsByIds,
+  reorderItems,
+  sanitizeIconUrl,
   upsertProductList,
   validateStoreBackup,
 } from '../utils/storeLogic';
@@ -127,6 +139,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [defaultLangForm, setDefaultLangForm] = useState<Language>(
     storeData.defaultLanguage || 'ar'
   );
+  const [iconPreviewFailed, setIconPreviewFailed] = useState(false);
+
+  useEffect(() => {
+    setIconPreviewFailed(false);
+  }, [branchForm.websiteIconUrl]);
 
   useEffect(() => {
     setRatesForm(storeData.rates);
@@ -264,6 +281,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleWebsiteIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const { dataUrl, sizeKB } = await compressImageToUnder120KB(file);
+      setBranchForm((prev) => ({ ...prev, websiteIconUrl: dataUrl }));
+      setStatusMessage({
+        type: 'success',
+        text:
+          lang === 'ar'
+            ? `تم ضغط أيقونة الموقع (${sizeKB} KB). اضغط "حفظ ونشر فوري" لاعتمادها عالمياً.`
+            : `Website icon compressed (${sizeKB} KB). Click "Save & Publish Live" to apply worldwide.`,
+      });
+    } catch (err) {
+      setStatusMessage({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : lang === 'ar'
+              ? 'فشل ضغط أيقونة الموقع.'
+              : 'Failed to compress website icon.',
+      });
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   // Product Submit (Unlimited daily additions & edits)
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -397,15 +442,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     adminProductSearch
   );
 
+  const handleMoveProduct = async (productId: string, direction: 'up' | 'down') => {
+    await commitMutatedToCloud((latest) => {
+      const idx = latest.products.findIndex((p) => p.id === productId);
+      return {
+        ...latest,
+        products: reorderItems(latest.products, idx, direction),
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      };
+    }, lang === 'ar' ? 'تم تحديث ترتيب المنتجات وحفظه في السحابة بنجاح.' : 'Product order updated and saved to Firebase Cloud.');
+  };
+
   const handleSaveRates = async (e: React.FormEvent) => {
     e.preventDefault();
     const updatedRates: MarketRates = {
       ...ratesForm,
       lastUpdated: new Date().toISOString(),
     };
-    await commitToCloud(
-      { ...storeData, rates: updatedRates },
-      'تم حفظ أسعار البورصة ونشرها فوراً على جميع الأجهزة.'
+    await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        rates: updatedRates,
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      }),
+      lang === 'ar'
+        ? 'تم حفظ أسعار البورصة ونشرها فوراً على جميع الأجهزة.'
+        : 'Market rates saved and published instantaneously to all devices.'
     );
   };
 
@@ -415,7 +477,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setRatesForm(res.rates);
       setStatusMessage({
         type: 'success',
-        text: 'تم جلب أحدث أسعار البورصة العالمية وحفظها على السحابة.',
+        text:
+          lang === 'ar'
+            ? 'تم جلب أحدث أسعار البورصة العالمية وحفظها على السحابة.'
+            : 'Latest global market rates fetched and saved to Firebase Cloud.',
       });
     } else if (res.error) {
       setStatusMessage({ type: 'error', text: res.error });
@@ -427,7 +492,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!newCatAr.trim() || !newCatEn.trim()) {
       setStatusMessage({
         type: 'error',
-        text: 'يرجى إدخال اسم الفئة بالعربية والإنجليزية.',
+        text:
+          lang === 'ar'
+            ? 'يرجى إدخال اسم الفئة بالعربية والإنجليزية.'
+            : 'Please enter category name in Arabic and English.',
       });
       return;
     }
@@ -437,48 +505,130 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       nameEn: newCatEn.trim(),
       icon: newCatIcon,
     };
-    await commitToCloud(
-      { ...storeData, categories: [...storeData.categories, newCat] },
-      'تمت إضافة الفئة الجديدة ونشرها على السحابة.'
+    const ok = await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        categories: [...latest.categories, newCat],
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      }),
+      lang === 'ar'
+        ? 'تمت إضافة الفئة الجديدة ونشرها على السحابة.'
+        : 'New category added and published to Firebase Cloud.'
     );
-    setNewCatAr('');
-    setNewCatEn('');
+    if (ok) {
+      setNewCatAr('');
+      setNewCatEn('');
+    }
   };
 
   const handleSaveCategoryEdit = async (catId: string) => {
     if (!editingCatAr.trim() || !editingCatEn.trim()) return;
-    const nextCats = storeData.categories.map((c) =>
-      c.id === catId ? { ...c, nameAr: editingCatAr.trim(), nameEn: editingCatEn.trim() } : c
+    const ok = await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        categories: latest.categories.map((c) =>
+          c.id === catId ? { ...c, nameAr: editingCatAr.trim(), nameEn: editingCatEn.trim() } : c
+        ),
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      }),
+      lang === 'ar'
+        ? 'تم تعديل اسم الفئة ومزامنتها فوراً.'
+        : 'Category updated and synced instantaneously.'
     );
-    await commitToCloud(
-      { ...storeData, categories: nextCats },
-      'تم تعديل اسم الفئة ومزامنتها فوراً.'
-    );
-    setEditingCatId(null);
+    if (ok) {
+      setEditingCatId(null);
+    }
+  };
+
+  const handleMoveCategory = async (catId: string, direction: 'up' | 'down') => {
+    await commitMutatedToCloud((latest) => {
+      const idx = latest.categories.findIndex((c) => c.id === catId);
+      return {
+        ...latest,
+        categories: reorderItems(latest.categories, idx, direction),
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      };
+    }, lang === 'ar' ? 'تم تحديث ترتيب الفئات وحفظه في السحابة بنجاح.' : 'Category order updated and saved to Firebase Cloud.');
   };
 
   const handleDeleteCategory = async (catId: string) => {
-    const nextCats = storeData.categories.filter((c) => c.id !== catId);
-    await commitToCloud(
-      { ...storeData, categories: nextCats },
-      'تم حذف الفئة ومزامنة المتجر.'
+    await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        categories: latest.categories.filter((c) => c.id !== catId),
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      }),
+      lang === 'ar'
+        ? 'تم حذف الفئة ومزامنة المتجر بنجاح.'
+        : 'Category deleted and synced instantaneously.'
     );
   };
 
   const handleSaveBanner = async (e: React.FormEvent) => {
     e.preventDefault();
-    await commitToCloud(
-      { ...storeData, banner: bannerForm },
-      'تم حفظ إعدادات البنر والعروض ونشرها فوراً.'
+    await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        banner: bannerForm,
+        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+      }),
+      lang === 'ar'
+        ? 'تم حفظ إعدادات البنر والعروض ونشرها فوراً.'
+        : 'Banner and offer settings saved and published instantaneously.'
     );
   };
 
   const handleSaveBranch = async (e: React.FormEvent) => {
     e.preventDefault();
-    await commitToCloud(
-      { ...storeData, branch: branchForm, defaultLanguage: defaultLangForm },
-      'تم تحديث بيانات الفرع وإعدادات اللغة ونشرها فوراً على السحابة.'
+    const rawUrl = (branchForm.websiteUrl || '').trim();
+    const normalizedUrl = rawUrl ? normalizeWebsiteUrl(rawUrl) : DEFAULT_WEBSITE_URL;
+    if (rawUrl && !normalizedUrl) {
+      setStatusMessage({
+        type: 'error',
+        text:
+          lang === 'ar'
+            ? 'رابط الموقع غير صالح. يرجى إدخال رابط يبدأ بـ https:// مثل https://ashrafgold.com'
+            : 'Invalid website URL. Please enter a valid link such as https://ashrafgold.com',
+      });
+      return;
+    }
+
+    const rawIconUrl = (branchForm.websiteIconUrl || '').trim();
+    const cleanIconUrl = rawIconUrl ? sanitizeIconUrl(rawIconUrl) : '';
+    if (rawIconUrl && !cleanIconUrl) {
+      setStatusMessage({
+        type: 'error',
+        text:
+          lang === 'ar'
+            ? 'رابط أيقونة الموقع غير صالح. استخدم رابط صورة https:// أو ارفع صورة من جهازك.'
+            : 'Invalid website icon URL. Please provide an https:// image link or upload an image file.',
+      });
+      return;
+    }
+
+    const nextBranch: BranchInfo = {
+      ...branchForm,
+      storeNameAr: branchForm.storeNameAr.trim() || DEFAULT_STORE_DATA.branch.storeNameAr,
+      storeNameEn: branchForm.storeNameEn.trim() || DEFAULT_STORE_DATA.branch.storeNameEn,
+      websiteUrl: normalizedUrl,
+      websiteIconUrl: cleanIconUrl,
+      websitePresetIcon: branchForm.websitePresetIcon || 'crown',
+    };
+
+    const safeDefaultLang: Language = defaultLangForm || lang || 'ar';
+    const ok = await commitMutatedToCloud(
+      (latest) => ({
+        ...latest,
+        branch: nextBranch,
+        defaultLanguage: safeDefaultLang,
+      }),
+      lang === 'ar'
+        ? 'تم تحديث اسم ورابط وأيقونة الموقع وبيانات الفرع ونشرها فوراً على السحابة.'
+        : 'Website name, link, icon, and branch details updated and published live.'
     );
+    if (ok) {
+      setBranchForm(nextBranch);
+    }
   };
 
   return (
@@ -487,7 +637,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-amber-300">
-            {copy.adminTitle}
+            {((lang === 'ar' ? storeData.branch.storeNameAr : storeData.branch.storeNameEn).trim() ||
+              (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold'))}{' '}
+            — {lang === 'ar' ? 'لوحة التحكم السحابية' : 'Cloud Admin'}
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
             {lang === 'ar'
@@ -1122,7 +1274,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isSaving || storeData.products.findIndex((p) => p.id === prod.id) <= 0}
+                            onClick={() => handleMoveProduct(prod.id, 'up')}
+                            aria-label={
+                              lang === 'ar'
+                                ? `تحريك ${displayTitle} لأعلى`
+                                : `Move ${displayTitle} up`
+                            }
+                            className="flex h-9 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={
+                              isSaving ||
+                              storeData.products.findIndex((p) => p.id === prod.id) >=
+                                storeData.products.length - 1
+                            }
+                            onClick={() => handleMoveProduct(prod.id, 'down')}
+                            aria-label={
+                              lang === 'ar'
+                                ? `تحريك ${displayTitle} لأسفل`
+                                : `Move ${displayTitle} down`
+                            }
+                            className="flex h-9 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
@@ -1338,6 +1520,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
+                        disabled={isSaving || storeData.categories.findIndex((c) => c.id === cat.id) <= 0}
+                        onClick={() => handleMoveCategory(cat.id, 'up')}
+                        aria-label={lang === 'ar' ? `تحريك ${cat.nameAr} لأعلى` : `Move ${cat.nameEn} up`}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          isSaving ||
+                          storeData.categories.findIndex((c) => c.id === cat.id) >=
+                            storeData.categories.length - 1
+                        }
+                        onClick={() => handleMoveCategory(cat.id, 'down')}
+                        aria-label={lang === 'ar' ? `تحريك ${cat.nameAr} لأسفل` : `Move ${cat.nameEn} down`}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           setEditingCatId(cat.id);
                           setEditingCatAr(cat.nameAr);
@@ -1464,81 +1668,330 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </form>
       )}
 
-      {/* TAB 5: BRANCH & CONTACT */}
+      {/* TAB 5: SITE IDENTITY (NAME, LINK, ICON) & BRANCH */}
       {activeTab === 'branch' && (
         <form
           onSubmit={handleSaveBranch}
-          className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 sm:p-6 space-y-4"
+          className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 sm:p-6 space-y-6"
         >
-          <h2 className="text-base sm:text-lg font-bold text-amber-300">
-            معلومات الفرع وأرقام التواصل
-          </h2>
+          {/* Section 1: Website Name, Link & Icon */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-amber-300 flex items-center gap-2">
+                  <Globe className="h-5 w-5 text-amber-400" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'هوية الموقع (الاسم والرابط والأيقونة)'
+                      : 'Website Identity (Name, Link & Icon)'}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {lang === 'ar'
+                    ? 'أي تعديل هنا يتحدّث فوراً في الهيدر وعنوان المتصفح وأيقونة التبويب والرابط للجميع حول العالم.'
+                    : 'Changes saved here update the header, browser tab title, favicon icon, and official link worldwide in real time.'}
+                </p>
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">اسم المتجر (عربي)</label>
-              <input
-                type="text"
-                value={branchForm.storeNameAr}
-                onChange={(e) => setBranchForm({ ...branchForm, storeNameAr: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
+              {/* Live Brand Identity Preview */}
+              <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-[#0B0F17] px-3.5 py-2">
+                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-amber-400/40 bg-amber-500/15 text-amber-400 shrink-0">
+                  {branchForm.websiteIconUrl && !iconPreviewFailed ? (
+                    <img
+                      src={branchForm.websiteIconUrl}
+                      alt="Site Icon Preview"
+                      onError={() => setIconPreviewFailed(true)}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : branchForm.websitePresetIcon === 'gem' ? (
+                    <Gem className="h-5 w-5" />
+                  ) : branchForm.websitePresetIcon === 'sparkles' ? (
+                    <Sparkles className="h-5 w-5" />
+                  ) : branchForm.websitePresetIcon === 'star' ? (
+                    <Star className="h-5 w-5" />
+                  ) : (
+                    <Crown className="h-5 w-5" />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-amber-200 truncate max-w-[180px]">
+                    {(lang === 'ar' ? branchForm.storeNameAr : branchForm.storeNameEn) ||
+                      (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold')}
+                  </div>
+                  <div className="text-[11px] text-slate-400 truncate max-w-[190px]" dir="ltr">
+                    {normalizeWebsiteUrl(branchForm.websiteUrl || '') ||
+                      branchForm.websiteUrl ||
+                      DEFAULT_WEBSITE_URL}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">Store Name (EN)</label>
-              <input
-                type="text"
-                value={branchForm.storeNameEn}
-                onChange={(e) => setBranchForm({ ...branchForm, storeNameEn: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="site-name-ar" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'اسم الموقع (عربي)' : 'Website Name (Arabic)'}
+                </label>
+                <input
+                  id="site-name-ar"
+                  type="text"
+                  value={branchForm.storeNameAr}
+                  onChange={(e) => setBranchForm({ ...branchForm, storeNameAr: e.target.value })}
+                  placeholder="أشرف جولد"
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white focus:border-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="site-name-en" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'اسم الموقع (إنجليزي)' : 'Website Name (English)'}
+                </label>
+                <input
+                  id="site-name-en"
+                  type="text"
+                  value={branchForm.storeNameEn}
+                  onChange={(e) => setBranchForm({ ...branchForm, storeNameEn: e.target.value })}
+                  placeholder="Ashraf Gold"
+                  dir="ltr"
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white focus:border-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label htmlFor="site-url" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar'
+                    ? 'رابط الموقع الرسمي (Website Link / URL)'
+                    : 'Website Link / URL'}
+                </label>
+                <div className="relative">
+                  <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-amber-400/70" />
+                  <input
+                    id="site-url"
+                    type="text"
+                    value={branchForm.websiteUrl || ''}
+                    onChange={(e) => setBranchForm({ ...branchForm, websiteUrl: e.target.value })}
+                    placeholder="https://ashraf-gold.web.app"
+                    dir="ltr"
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] pl-9 pr-3 text-sm text-white font-mono-tabular focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">عنوان الفرع (عربي)</label>
-              <input
-                type="text"
-                value={branchForm.addressAr}
-                onChange={(e) => setBranchForm({ ...branchForm, addressAr: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
+
+            {/* Website Icon Controls */}
+            <div className="rounded-xl border border-amber-500/20 bg-[#0B0F17]/70 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-amber-300">
+                  {lang === 'ar'
+                    ? 'أيقونة الموقع والشعار (Website Icon / Favicon)'
+                    : 'Website Icon & Favicon'}
+                </span>
+                {branchForm.websiteIconUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setBranchForm({ ...branchForm, websiteIconUrl: '' })}
+                    className="text-xs font-semibold text-rose-300 hover:text-rose-200 cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'إزالة الصورة والعودة للأيقونة المختارة' : 'Clear custom image'}
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <span className="block text-[11px] text-slate-400 mb-1">
+                    {lang === 'ar'
+                      ? 'رفع صورة أيقونة من الجهاز (تُضغط تلقائياً < 120KB)'
+                      : 'Upload Custom Icon Image (Auto-compressed < 120KB)'}
+                  </span>
+                  <label className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#131A26] px-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
+                    <ImagePlus className="h-4 w-4" />
+                    <span>
+                      {lang === 'ar' ? 'اختيار صورة أيقونة / شعار' : 'Choose Icon Image File'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleWebsiteIconUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <label htmlFor="site-icon-url" className="block text-[11px] text-slate-400 mb-1">
+                    {lang === 'ar'
+                      ? 'أو الصق رابط صورة الأيقونة (URL أو /icon.svg)'
+                      : 'Or Paste Icon Image URL (https://... or /icon.svg)'}
+                  </label>
+                  <input
+                    id="site-icon-url"
+                    type="text"
+                    value={branchForm.websiteIconUrl || ''}
+                    onChange={(e) =>
+                      setBranchForm({ ...branchForm, websiteIconUrl: e.target.value })
+                    }
+                    placeholder="https://example.com/logo.png"
+                    dir="ltr"
+                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#131A26] px-3 text-xs sm:text-sm text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[11px] text-slate-400 mb-2">
+                  {lang === 'ar'
+                    ? 'أو اختر أيقونة ملكية جاهزة (تُحدّث الهيدر وأيقونة المتصفح):'
+                    : 'Or pick a luxury preset icon (updates both header & browser tab favicon):'}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { id: 'crown', labelAr: 'تاج ملكي', labelEn: 'Crown', Icon: Crown },
+                      { id: 'gem', labelAr: 'ألماسة', labelEn: 'Diamond', Icon: Gem },
+                      { id: 'sparkles', labelAr: 'بريق ذهب', labelEn: 'Sparkles', Icon: Sparkles },
+                      { id: 'star', labelAr: 'نجمة', labelEn: 'Star', Icon: Star },
+                    ] as const
+                  ).map(({ id, labelAr, labelEn, Icon }) => {
+                    const isSelected =
+                      !branchForm.websiteIconUrl &&
+                      (branchForm.websitePresetIcon || 'crown') === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() =>
+                          setBranchForm({
+                            ...branchForm,
+                            websitePresetIcon: id as WebsitePresetIcon,
+                            websiteIconUrl: '',
+                          })
+                        }
+                        className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition cursor-pointer ${
+                          isSelected
+                            ? 'border-amber-400 bg-amber-500/20 text-amber-200'
+                            : 'border-slate-700 bg-[#131A26] text-slate-300 hover:border-amber-500/40 hover:text-white'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4 text-amber-400" />
+                        <span>{lang === 'ar' ? labelAr : labelEn}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">Branch Address (EN)</label>
-              <input
-                type="text"
-                value={branchForm.addressEn}
-                onChange={(e) => setBranchForm({ ...branchForm, addressEn: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">رقم الواتساب (بدون +)</label>
-              <input
-                type="text"
-                value={branchForm.whatsappNumber}
-                onChange={(e) => setBranchForm({ ...branchForm, whatsappNumber: e.target.value })}
-                className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">رقم الاتصال الهاتفي</label>
-              <input
-                type="text"
-                value={branchForm.phoneNumber}
-                onChange={(e) => setBranchForm({ ...branchForm, phoneNumber: e.target.value })}
-                className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">لغة المتجر الافتراضية للزوار (Language Settings)</label>
-              <select
-                value={defaultLangForm}
-                onChange={(e) => setDefaultLangForm(e.target.value as Language)}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              >
-                <option value="ar">العربية (RTL)</option>
-                <option value="en">English (LTR)</option>
-              </select>
+          </div>
+
+          <hr className="border-amber-500/15" />
+
+          {/* Section 2: Branch & Contact Info */}
+          <div className="space-y-4">
+            <h3 className="text-sm sm:text-base font-bold text-amber-300">
+              {lang === 'ar'
+                ? 'معلومات الفرع وأرقام التواصل وإعدادات اللغة'
+                : 'Branch Address, Contact & Default Language'}
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="branch-address-ar" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'عنوان الفرع (عربي)' : 'Branch Address (AR)'}
+                </label>
+                <input
+                  id="branch-address-ar"
+                  type="text"
+                  value={branchForm.addressAr}
+                  onChange={(e) => setBranchForm({ ...branchForm, addressAr: e.target.value })}
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="branch-address-en" className="block text-xs text-slate-300 mb-1">
+                  Branch Address (EN)
+                </label>
+                <input
+                  id="branch-address-en"
+                  type="text"
+                  value={branchForm.addressEn}
+                  onChange={(e) => setBranchForm({ ...branchForm, addressEn: e.target.value })}
+                  dir="ltr"
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="branch-hours-ar" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'مواعيد العمل (عربي)' : 'Working Hours (AR)'}
+                </label>
+                <input
+                  id="branch-hours-ar"
+                  type="text"
+                  value={branchForm.workingHoursAr}
+                  onChange={(e) =>
+                    setBranchForm({ ...branchForm, workingHoursAr: e.target.value })
+                  }
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="branch-hours-en" className="block text-xs text-slate-300 mb-1">
+                  Working Hours (EN)
+                </label>
+                <input
+                  id="branch-hours-en"
+                  type="text"
+                  value={branchForm.workingHoursEn}
+                  onChange={(e) =>
+                    setBranchForm({ ...branchForm, workingHoursEn: e.target.value })
+                  }
+                  dir="ltr"
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="branch-whatsapp" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'رقم الواتساب (بدون +)' : 'WhatsApp Number (digits only)'}
+                </label>
+                <input
+                  id="branch-whatsapp"
+                  type="text"
+                  value={branchForm.whatsappNumber}
+                  onChange={(e) =>
+                    setBranchForm({ ...branchForm, whatsappNumber: e.target.value })
+                  }
+                  dir="ltr"
+                  className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="branch-phone" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar' ? 'رقم الاتصال الهاتفي' : 'Phone Number'}
+                </label>
+                <input
+                  id="branch-phone"
+                  type="text"
+                  value={branchForm.phoneNumber}
+                  onChange={(e) => setBranchForm({ ...branchForm, phoneNumber: e.target.value })}
+                  dir="ltr"
+                  className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label htmlFor="default-lang" className="block text-xs text-slate-300 mb-1">
+                  {lang === 'ar'
+                    ? 'لغة المتجر الافتراضية للزوار (Language Settings)'
+                    : 'Default Visitor Language'}
+                </label>
+                <select
+                  id="default-lang"
+                  value={defaultLangForm}
+                  onChange={(e) => setDefaultLangForm(e.target.value as Language)}
+                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                >
+                  <option value="ar">العربية (RTL)</option>
+                  <option value="en">English (LTR)</option>
+                </select>
+              </div>
             </div>
           </div>
 

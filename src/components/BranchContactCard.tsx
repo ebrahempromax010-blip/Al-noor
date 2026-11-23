@@ -1,8 +1,12 @@
-import React from 'react';
-import { Clock, MapPin, MessageCircle, Phone } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, Clock, Copy, ExternalLink, Globe, MapPin, MessageCircle, Phone } from 'lucide-react';
 import { BranchInfo, Language } from '../types/store';
 import { t } from '../utils/i18n';
-import { sanitizePhoneForWhatsApp } from '../utils/storeLogic';
+import {
+  DEFAULT_WEBSITE_URL,
+  normalizeWebsiteUrl,
+  sanitizePhoneForWhatsApp,
+} from '../utils/storeLogic';
 
 interface BranchContactCardProps {
   lang: Language;
@@ -11,12 +15,29 @@ interface BranchContactCardProps {
 
 export const BranchContactCard: React.FC<BranchContactCardProps> = ({ lang, branch }) => {
   const copy = t(lang);
-  const storeName = lang === 'ar' ? branch.storeNameAr : branch.storeNameEn;
+  const [copied, setCopied] = useState(false);
+
+  const storeName =
+    (lang === 'ar' ? branch.storeNameAr : branch.storeNameEn).trim() ||
+    (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold');
   const address = lang === 'ar' ? branch.addressAr : branch.addressEn;
   const hours = lang === 'ar' ? branch.workingHoursAr : branch.workingHoursEn;
+  const websiteUrl = normalizeWebsiteUrl(branch.websiteUrl || '') || DEFAULT_WEBSITE_URL;
   const waPhone = sanitizePhoneForWhatsApp(branch.whatsappNumber);
   const waDirectUrl = `https://wa.me/${waPhone}`;
   const telUrl = `tel:${branch.phoneNumber.replace(/\s+/g, '')}`;
+
+  const handleCopyWebsiteUrl = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(websiteUrl);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
     <>
@@ -49,6 +70,33 @@ export const BranchContactCard: React.FC<BranchContactCardProps> = ({ lang, bran
                   </span>
                 </p>
               )}
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <a
+                  href={websiteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-[#0B0F17] px-3 py-1.5 text-xs sm:text-sm font-medium text-amber-300 transition hover:border-amber-400 hover:text-amber-200"
+                  dir="ltr"
+                >
+                  <Globe className="h-4 w-4 shrink-0 text-amber-400" />
+                  <span className="truncate max-w-[240px] sm:max-w-xs">{websiteUrl}</span>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={handleCopyWebsiteUrl}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-[#0B0F17] px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-amber-500/40 hover:text-white cursor-pointer"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5 text-amber-400/80" />
+                  )}
+                  <span>{copied ? copy.linkCopied : copy.copyLinkBtn}</span>
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 shrink-0">

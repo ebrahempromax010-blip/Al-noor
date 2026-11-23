@@ -1,12 +1,14 @@
-import React from 'react';
-import { Cloud, CloudOff, Crown, Gem, Loader2, Search, X } from 'lucide-react';
-import { CloudSyncStatus, Language } from '../types/store';
+import React, { useEffect, useState } from 'react';
+import { Cloud, CloudOff, Crown, Gem, Loader2, Search, Sparkles, Star, X } from 'lucide-react';
+import { CloudSyncStatus, Language, WebsitePresetIcon } from '../types/store';
 import { t } from '../utils/i18n';
 import { PWAInstallButton } from './PWAComponents';
 
 interface HeaderProps {
   lang: Language;
   storeName: string;
+  websiteIconUrl?: string;
+  websitePresetIcon?: WebsitePresetIcon;
   searchQuery: string;
   onSearchChange: (val: string) => void;
   syncStatus: CloudSyncStatus;
@@ -16,12 +18,35 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   lang,
   storeName,
+  websiteIconUrl,
+  websitePresetIcon = 'crown',
   searchQuery,
   onSearchChange,
   syncStatus,
   onBrandClick,
 }) => {
   const copy = t(lang);
+  const [iconLoadFailed, setIconLoadFailed] = useState(false);
+
+  useEffect(() => {
+    setIconLoadFailed(false);
+  }, [websiteIconUrl]);
+
+  const renderPresetIcon = () => {
+    switch (websitePresetIcon) {
+      case 'gem':
+        return <Gem className="h-4 w-4" />;
+      case 'sparkles':
+        return <Sparkles className="h-4 w-4" />;
+      case 'star':
+        return <Star className="h-4 w-4" />;
+      case 'crown':
+      default:
+        return <Crown className="h-4 w-4" />;
+    }
+  };
+
+  const showCustomImage = Boolean(websiteIconUrl && !iconLoadFailed);
 
   const syncDisplay = (() => {
     switch (syncStatus) {
@@ -63,14 +88,25 @@ export const Header: React.FC<HeaderProps> = ({
           className="flex items-center gap-2 shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-lg py-1"
           aria-label={storeName}
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-400/35 bg-gradient-to-br from-amber-400/20 via-amber-500/10 to-transparent text-amber-400 shadow-inner">
-            <Crown className="h-4 w-4" />
+          <span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl border border-amber-400/35 bg-gradient-to-br from-amber-400/20 via-amber-500/10 to-transparent text-amber-400 shadow-inner">
+            {showCustomImage ? (
+              <img
+                src={websiteIconUrl}
+                alt={storeName}
+                onError={() => setIconLoadFailed(true)}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              renderPresetIcon()
+            )}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="font-display-luxury text-base sm:text-xl font-bold tracking-tight bg-gradient-to-r from-amber-200 via-amber-400 to-amber-500 bg-clip-text text-transparent whitespace-nowrap">
               {storeName}
             </span>
-            <Gem className="hidden sm:inline-block h-3.5 w-3.5 text-amber-400/80" />
+            {!showCustomImage && (
+              <Gem className="hidden sm:inline-block h-3.5 w-3.5 text-amber-400/80" />
+            )}
           </span>
         </button>
 
@@ -110,7 +146,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 3: Real Live Cloud Sync Indicator + Optional PWA Install */}
         <div className="flex items-center gap-2 shrink-0">
-          <PWAInstallButton lang={lang} />
+          <PWAInstallButton lang={lang} storeName={storeName} />
           <div
             title={syncDisplay.label}
             aria-label={syncDisplay.label}

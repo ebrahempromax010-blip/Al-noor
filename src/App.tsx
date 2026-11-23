@@ -16,6 +16,7 @@ import { fetchGlobalSpotRates } from './utils/marketApi';
 import {
   calculateCartSummary,
   filterProducts,
+  getEffectiveSiteIdentity,
   getWishlistProducts,
   sanitizeForFirestore,
   toggleWishlistItem,
@@ -44,6 +45,7 @@ const BROADCAST_CHANNEL_NAME = 'ashraf_gold_live_sync';
 
 export default function App() {
   const [lang, setLang] = useState<Language>('ar');
+  const langRef = useRef<Language>('ar');
   const hasManualLangChoice = useRef(false);
 
   const [storeData, setStoreData] = useState<StoreData>(DEFAULT_STORE_DATA);
@@ -77,6 +79,7 @@ export default function App() {
 
   // Sync HTML dir and lang attributes
   useEffect(() => {
+    langRef.current = lang;
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = lang;
   }, [lang]);
@@ -96,8 +99,11 @@ export default function App() {
           : prev.categories,
       products: Array.isArray(remote.products) ? remote.products : prev.products,
       banner: remote.banner || prev.banner,
-      branch: remote.branch || prev.branch,
-      defaultLanguage: remote.defaultLanguage || prev.defaultLanguage,
+      branch: {
+        ...prev.branch,
+        ...(remote.branch || {}),
+      },
+      defaultLanguage: remote.defaultLanguage || prev.defaultLanguage || langRef.current || 'ar',
       updatedAt: remote.updatedAt || prev.updatedAt,
     }));
 
@@ -156,35 +162,61 @@ export default function App() {
     }, 3500);
   };
 
+  const formatFirebaseError = (err: unknown, actionLabel: string): string => {
+    if (err && typeof err === 'object') {
+      const code = 'code' in err ? String((err as { code?: unknown }).code || '') : '';
+      const message =
+        'message' in err ? String((err as { message?: unknown }).message || '') : '';
+      if (code || message) {
+        return `${actionLabel}${code ? ` [${code}]` : ''}: ${message}`;
+      }
+    }
+    return `${actionLabel}: حدث خطأ غير متوقع في الاتصال أو الصلاحيات مع Firebase.`;
+  };
+
+  const commitSanitizedStoreData = async (
+    rawNextData: StoreData
+  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
+    const previousData = latestStoreDataRef.current;
+    const resolvedDefaultLanguage: Language =
+      rawNextData.defaultLanguage === 'en' || rawNextData.defaultLanguage === 'ar'
+        ? rawNextData.defaultLanguage
+        : previousData.defaultLanguage === 'en' || previousData.defaultLanguage === 'ar'
+          ? previousData.defaultLanguage
+          : langRef.current || 'ar';
+
+    const sanitized = sanitizeForFirestore<StoreData>({
+      ...rawNextData,
+      defaultLanguage: resolvedDefaultLanguage,
+      updatedAt: new Date().toISOString(),
+    });
+
+    setSyncStatus('saving');
+    setCloudError(null);
+    latestStoreDataRef.current = sanitized;
+    setStoreData(sanitized);
+    broadcastToTabs(sanitized);
+
+    try {
+      const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
+      await setDoc(storeDocRef, sanitized, { merge: true });
+      setSyncStatus('synced');
+      return { ok: true, data: sanitized };
+    } catch (err) {
+      latestStoreDataRef.current = previousData;
+      setStoreData(previousData);
+      broadcastToTabs(previousData);
+      const msg = formatFirebaseError(err, 'فشل الحفظ السحابي في Firebase');
+      setSyncStatus('error');
+      setCloudError(msg);
+      return { ok: false, error: msg };
+    }
+  };
+
   const saveStoreToCloud = async (
     nextData: StoreData
   ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-    const task = async (): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-      const sanitized = sanitizeForFirestore({
-        ...nextData,
-        updatedAt: new Date().toISOString(),
-      });
-      setSyncStatus('saving');
-      setCloudError(null);
-      latestStoreDataRef.current = sanitized;
-      setStoreData(sanitized);
-      broadcastToTabs(sanitized);
-      try {
-        const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-        await setDoc(storeDocRef, sanitized, { merge: true });
-        setSyncStatus('synced');
-        return { ok: true, data: sanitized };
-      } catch (err) {
-        const msg =
-          err instanceof Error
-            ? `فشل الحفظ السحابي في Firebase: ${err.message}`
-            : 'حدث خطأ غير متوقع أثناء الحفظ في Firebase.';
-        setSyncStatus('error');
-        setCloudError(msg);
-        return { ok: false, error: msg };
-      }
-    };
-
+    const task = () => commitSanitizedStoreData(nextData);
     const queued = writeQueueRef.current.then(task, task);
     writeQueueRef.current = queued;
     return queued;
@@ -193,32 +225,7 @@ export default function App() {
   const updateStoreAndPublish = (
     updater: (latest: StoreData) => StoreData
   ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-    const task = async (): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-      const nextData = sanitizeForFirestore({
-        ...updater(latestStoreDataRef.current),
-        updatedAt: new Date().toISOString(),
-      });
-      setSyncStatus('saving');
-      setCloudError(null);
-      latestStoreDataRef.current = nextData;
-      setStoreData(nextData);
-      broadcastToTabs(nextData);
-      try {
-        const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-        await setDoc(storeDocRef, nextData, { merge: true });
-        setSyncStatus('synced');
-        return { ok: true, data: nextData };
-      } catch (err) {
-        const msg =
-          err instanceof Error
-            ? `فشل الحفظ السحابي في Firebase: ${err.message}`
-            : 'حدث خطأ غير متوقع أثناء الحفظ في Firebase.';
-        setSyncStatus('error');
-        setCloudError(msg);
-        return { ok: false, error: msg };
-      }
-    };
-
+    const task = () => commitSanitizedStoreData(updater(latestStoreDataRef.current));
     const queued = writeQueueRef.current.then(task, task);
     writeQueueRef.current = queued;
     return queued;
@@ -284,18 +291,34 @@ export default function App() {
     try {
       const { rates } = await fetchGlobalSpotRates(storeData.rates.usdEgp);
       const nextRates: MarketRates = {
-        ...storeData.rates,
+        ...latestStoreDataRef.current.rates,
         ...rates,
       };
-      const nextStoreData: StoreData = {
-        ...storeData,
-        rates: nextRates,
-        updatedAt: new Date().toISOString(),
-      };
-      setStoreData(nextStoreData);
-      broadcastToTabs(nextStoreData);
       if (isAdminUnlocked) {
-        await saveStoreToCloud(nextStoreData);
+        const saveRes = await updateStoreAndPublish((latest) => ({
+          ...latest,
+          rates: {
+            ...latest.rates,
+            ...rates,
+          },
+          defaultLanguage: latest.defaultLanguage || langRef.current || 'ar',
+        }));
+        if (!saveRes.ok) {
+          const errMsg = saveRes.error || 'فشل حفظ أسعار البورصة في Firebase.';
+          setMarketFeedback(errMsg);
+          showTimedToast(errMsg);
+          return { ok: false, error: errMsg };
+        }
+      } else {
+        const nextStoreData: StoreData = sanitizeForFirestore({
+          ...latestStoreDataRef.current,
+          rates: nextRates,
+          defaultLanguage:
+            latestStoreDataRef.current.defaultLanguage || langRef.current || 'ar',
+          updatedAt: new Date().toISOString(),
+        });
+        setStoreData(nextStoreData);
+        broadcastToTabs(nextStoreData);
       }
       const msg =
         lang === 'ar'
@@ -380,8 +403,58 @@ export default function App() {
   };
 
   const copy = t(lang);
-  const storeName =
-    lang === 'ar' ? storeData.branch.storeNameAr : storeData.branch.storeNameEn;
+  const siteIdentity = useMemo(
+    () => getEffectiveSiteIdentity(storeData, lang),
+    [storeData, lang]
+  );
+
+  // Sync live browser title, canonical/og:url link, and favicon icon whenever cloud identity changes
+  useEffect(() => {
+    const fullTitle = `${siteIdentity.name} — ${copy.brandSubtitle}`;
+    document.title = fullTitle;
+
+    const ogTitle = document.querySelector<HTMLMetaElement>('meta[property="og:title"]');
+    if (ogTitle) ogTitle.content = fullTitle;
+
+    const appleTitle = document.querySelector<HTMLMetaElement>(
+      'meta[name="apple-mobile-web-app-title"]'
+    );
+    if (appleTitle) appleTitle.content = siteIdentity.name;
+
+    let ogUrl = document.querySelector<HTMLMetaElement>('meta[property="og:url"]');
+    if (!ogUrl) {
+      ogUrl = document.createElement('meta');
+      ogUrl.setAttribute('property', 'og:url');
+      document.head.appendChild(ogUrl);
+    }
+    ogUrl.content = siteIdentity.url;
+
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement('link');
+      canonical.rel = 'canonical';
+      document.head.appendChild(canonical);
+    }
+    canonical.href = siteIdentity.url;
+
+    const iconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (iconLink) {
+      iconLink.href = siteIdentity.faviconHref;
+      if (
+        siteIdentity.faviconHref.endsWith('.svg') ||
+        siteIdentity.faviconHref.startsWith('data:image/svg+xml')
+      ) {
+        iconLink.type = 'image/svg+xml';
+      } else {
+        iconLink.removeAttribute('type');
+      }
+    }
+
+    const appleIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+    if (appleIcon) {
+      appleIcon.href = siteIdentity.iconUrl || '/apple-touch-icon.png';
+    }
+  }, [siteIdentity, copy.brandSubtitle]);
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100">
@@ -389,7 +462,9 @@ export default function App() {
 
       <Header
         lang={lang}
-        storeName={storeName}
+        storeName={siteIdentity.name}
+        websiteIconUrl={siteIdentity.iconUrl}
+        websitePresetIcon={siteIdentity.presetIcon}
         searchQuery={searchQuery}
         onSearchChange={(val) => {
           setSearchQuery(val);
@@ -561,6 +636,7 @@ export default function App() {
                     rates={storeData.rates}
                     lang={lang}
                     whatsappNumber={storeData.branch.whatsappNumber}
+                    storeName={siteIdentity.name}
                     isFavorite={wishlistIds.includes(product.id)}
                     onToggleFavorite={handleToggleFavorite}
                     onAddToCart={handleAddToCart}
@@ -626,6 +702,7 @@ export default function App() {
         rates={storeData.rates}
         lang={lang}
         whatsappNumber={storeData.branch.whatsappNumber}
+        storeName={siteIdentity.name}
         isFavorite={zoomedProduct ? wishlistIds.includes(zoomedProduct.id) : false}
         onToggleFavorite={handleToggleFavorite}
         onClose={() => setZoomedProduct(null)}

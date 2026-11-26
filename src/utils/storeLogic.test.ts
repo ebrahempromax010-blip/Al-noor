@@ -1,280 +1,265 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test from 'node:test';
+import { DEFAULT_ADMIN_PIN, DEFAULT_TECH_PRODUCTS } from '../data/defaultStoreData.ts';
 import {
-  ADMIN_SECRET_PIN,
-  buildWhatsAppCartUrl,
-  buildWhatsAppProductUrl,
-  calculateCartSummary,
-  calculateProductPrice,
-  computeDiamondPrices,
-  computeRatesFromSpot,
-  filterAdminProducts,
-  filterProducts,
-  getEffectiveSiteIdentity,
-  getWishlistProducts,
-  normalizeWebsiteUrl,
-  removeProductsByIds,
-  reorderItems,
+  applyPermanentProductDelete,
+  applyRemoteStoreData,
+  buildWhatsappOrderUrl,
+  calculateDiscountedPrice,
+  filterAndSortTechProducts,
+  findRestockMatches,
+  formatWhatsappOrderMessage,
+  isDesktopDevice,
+  isValidAdminPin,
+  normalizeWhatsappDigits,
+  restoreDefaultProducts,
   sanitizeForFirestore,
-  sanitizeIconUrl,
-  toggleWishlistItem,
-  upsertProductList,
-  validateStoreBackup,
-} from './storeLogic';
-import { DEFAULT_STORE_DATA } from '../data/defaultStoreData';
-import { Product, StoreData } from '../types/store';
+  sanitizeOrderPayload,
+  sanitizeStoreDataForCloud,
+  searchCatalogProductsForAI,
+} from './storeLogic.ts';
 
-test('admin pin matches required secret code', () => {
-  assert.equal(ADMIN_SECRET_PIN, '8492710536');
-});
-
-test('auto-linked pricing calculates weight * (karatRate + makingCharge) and applies discount', () => {
-  const sampleProduct: Product = {
-    id: 'test-1',
-    code: 'AG-100',
-    nameAr: 'خاتم',
-    nameEn: 'Ring',
-    categoryId: 'women',
-    metal: 'gold',
-    karat: '21',
-    weightGrams: 10,
-    makingChargePerGram: 200,
-    pricingMode: 'auto',
-    manualPrice: 50000,
-    discountPercent: 10,
-    imageUrl: '',
-  };
-
-  const rates = { ...DEFAULT_STORE_DATA.rates, gold21: 3800 };
-  const breakdown = calculateProductPrice(sampleProduct, rates, true);
-
-  assert.equal(breakdown.originalPrice, 40000);
-  assert.equal(breakdown.finalPrice, 36000);
-  assert.equal(breakdown.discountAmount, 4000);
-  assert.equal(breakdown.hasDiscount, true);
-});
-
-test('manual pricing ignores auto rate when pricingMode is manual', () => {
-  const manualProduct: Product = {
-    id: 'test-2',
-    code: 'AG-200',
-    nameAr: 'ساعة',
-    nameEn: 'Watch',
-    categoryId: 'men',
-    metal: 'gold',
-    karat: '18',
-    weightGrams: 20,
-    makingChargePerGram: 200,
-    pricingMode: 'manual',
-    manualPrice: 75000,
-    discountPercent: 0,
-    imageUrl: '',
-  };
-
-  const breakdown = calculateProductPrice(manualProduct, DEFAULT_STORE_DATA.rates, true);
-  assert.equal(breakdown.originalPrice, 75000);
-  assert.equal(breakdown.finalPrice, 75000);
-  assert.equal(breakdown.hasDiscount, false);
-});
-
-test('computeRatesFromSpot derives 24K, 21K, 18K, gold pound and silver accurately', () => {
-  const spot = computeRatesFromSpot(2680, 31.1, 50);
-  // 2680 / 31.1034768 * 50 ≈ 4308
-  assert.ok(spot.gold24 > 4250 && spot.gold24 < 4350);
-  assert.equal(spot.gold21, Math.round(spot.gold24 * (21 / 24)));
-  assert.equal(spot.gold18, Math.round(spot.gold24 * (18 / 24)));
-  assert.equal(spot.goldPound, Math.round(spot.gold21 * 8));
-  assert.ok(spot.silver925 > 0 && spot.silverSwiss >= spot.silver925);
-});
-
-test('calculateCartSummary totals items, subtotal, and savings correctly', () => {
-  const products = DEFAULT_STORE_DATA.products;
-  const cart = [
-    { productId: products[0].id, quantity: 2 },
-    { productId: products[3].id, quantity: 1 },
-  ];
-  const summary = calculateCartSummary(
-    cart,
-    products,
-    DEFAULT_STORE_DATA.rates,
-    DEFAULT_STORE_DATA.rates.autoLinkPrices
+test('isDesktopDevice allows Windows/Mac desktops and blocks Android/iOS mobile devices', () => {
+  assert.equal(
+    isDesktopDevice(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+      0,
+      1440
+    ),
+    true
   );
-  assert.equal(summary.totalItems, 3);
-  assert.equal(summary.lines.length, 2);
-  assert.ok(summary.subtotal > 0);
-  assert.ok(summary.totalSavings > 0);
+  assert.equal(
+    isDesktopDevice(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15',
+      0,
+      1280
+    ),
+    true
+  );
+  assert.equal(
+    isDesktopDevice(
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+      5,
+      390
+    ),
+    false
+  );
+  assert.equal(
+    isDesktopDevice(
+      'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile Safari/537.36',
+      5,
+      412
+    ),
+    false
+  );
+  assert.equal(
+    isDesktopDevice(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15',
+      5,
+      1024
+    ),
+    false
+  );
 });
 
-test('filterProducts handles offers tab and search by karat or code', () => {
-  const offers = filterProducts(DEFAULT_STORE_DATA.products, 'offers', '');
+test('isValidAdminPin validates exact 10-digit PINs', () => {
+  assert.equal(isValidAdminPin(DEFAULT_ADMIN_PIN), true);
+  assert.equal(isValidAdminPin('9876543210'), true);
+  assert.equal(isValidAdminPin('12345'), false);
+  assert.equal(isValidAdminPin('123456789a'), false);
+});
+
+test('filterAndSortTechProducts filters computers, accessories, offers and sorts by price', () => {
+  const computers = filterAndSortTechProducts(DEFAULT_TECH_PRODUCTS, {
+    categoryTab: 'computers',
+    searchQuery: '',
+    sortBy: 'price_asc',
+  });
+  assert.ok(computers.length >= 3);
+  assert.ok(computers.every((p) => p.categoryGroup === 'computers'));
+  assert.ok(
+    calculateDiscountedPrice(computers[0].price, computers[0].discountPercent) <=
+      calculateDiscountedPrice(computers[1].price, computers[1].discountPercent)
+  );
+
+  const offers = filterAndSortTechProducts(DEFAULT_TECH_PRODUCTS, {
+    categoryTab: 'offers',
+    searchQuery: '',
+    sortBy: 'offers_only',
+  });
   assert.ok(offers.every((p) => p.discountPercent > 0));
-
-  const byCode = filterProducts(DEFAULT_STORE_DATA.products, 'all', 'AG-S925');
-  assert.equal(byCode.length, 1);
-  assert.equal(byCode[0].id, 'ag-silver-ring-5');
 });
 
-test('WhatsApp URL builders encode product and invoice text cleanly', () => {
-  const url = buildWhatsAppProductUrl('01012345678', DEFAULT_STORE_DATA.products[0], 120000, 'ar');
-  assert.ok(url.startsWith('https://wa.me/201012345678?text='));
+test('applyPermanentProductDelete tracks deleted default IDs and keeps them deleted across remote merges', () => {
+  const target = DEFAULT_TECH_PRODUCTS[0];
+  const afterDelete = applyPermanentProductDelete(DEFAULT_TECH_PRODUCTS, [], [], [target.id]);
 
-  const brandedUrl = buildWhatsAppProductUrl(
-    '01012345678',
-    DEFAULT_STORE_DATA.products[0],
-    120000,
-    'en',
-    'Palace Gold'
-  );
-  assert.ok(decodeURIComponent(brandedUrl).includes('Hello Palace Gold'));
+  assert.equal(afterDelete.products.some((p) => p.id === target.id), false);
+  assert.ok(afterDelete.deletedDefaultIds.includes(target.id));
+  assert.equal(afterDelete.deletedProductsHistory[0].id, target.id);
 
-  const summary = calculateCartSummary(
-    [{ productId: DEFAULT_STORE_DATA.products[0].id, quantity: 1 }],
-    DEFAULT_STORE_DATA.products,
-    DEFAULT_STORE_DATA.rates,
-    true
-  );
-  const cartUrl = buildWhatsAppCartUrl('201000000000', summary, 'أشرف جولد', 'ar');
-  assert.ok(cartUrl.includes('https://wa.me/201000000000?text='));
+  // Even if remote snapshot somehow still contained the product ID alongside deletedDefaultIds,
+  // applyRemoteStoreData keeps it permanently removed.
+  const rehydrated = applyRemoteStoreData({
+    products: DEFAULT_TECH_PRODUCTS,
+    deletedDefaultIds: afterDelete.deletedDefaultIds,
+    deletedProductsHistory: afterDelete.deletedProductsHistory,
+  });
+  assert.equal(rehydrated.products.some((p) => p.id === target.id), false);
+
+  // Restoring defaults puts it back cleanly without duplicating existing products
+  const restored = restoreDefaultProducts(rehydrated.products, DEFAULT_TECH_PRODUCTS);
+  assert.equal(restored.deletedDefaultIds.length, 0);
+  assert.equal(restored.products.filter((p) => p.id === target.id).length, 1);
 });
 
-test('validateStoreBackup rejects invalid JSON and accepts valid store schema', () => {
-  const bad = validateStoreBackup('{"foo": "bar"}');
-  assert.equal(bad.ok, false);
-
-  const good = validateStoreBackup(JSON.stringify(DEFAULT_STORE_DATA));
-  assert.equal(good.ok, true);
+test('findRestockMatches triggers alert when admin adds a product matching customer watch query', () => {
+  const watches = [
+    {
+      id: 'w-1',
+      query: 'ASUS ROG i9',
+      matchedDeletedProductId: 'prod-laptop-razer-pro',
+      createdAt: new Date().toISOString(),
+      notified: false,
+    },
+  ];
+  const matches = findRestockMatches(DEFAULT_TECH_PRODUCTS, watches);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].watchId, 'w-1');
+  assert.equal(matches[0].product.id, 'prod-laptop-razer-pro');
 });
 
-test('computeDiamondPrices scales 1ct, 0.5ct, and 0.25ct dynamically with USD/EGP exchange', () => {
-  const d = computeDiamondPrices(4000, 50);
-  assert.equal(d.carat1Usd, 4000);
-  assert.equal(d.carat1Egp, 200000);
-  assert.equal(d.halfCaratEgp, 84000);
-  assert.equal(d.quarterCaratEgp, 38000);
-});
+test('sanitizeOrderPayload validates required fields and builds background order payload', () => {
+  const invalid = sanitizeOrderPayload({
+    customerName: 'أ',
+    customerAddress: 'شارع',
+    customerPhone: '123',
+    items: [],
+    currency: 'ج.م',
+  });
+  assert.equal(invalid.ok, false);
 
-test('upsertProductList and removeProductsByIds allow unlimited additions, edits, and deletions', () => {
-  let list = [...DEFAULT_STORE_DATA.products];
-  const initialCount = list.length;
-
-  // Add 15 products consecutively (no daily or total limit)
-  for (let i = 1; i <= 15; i += 1) {
-    list = upsertProductList(
-      list,
+  const valid = sanitizeOrderPayload({
+    customerName: 'محمد أحمد',
+    customerAddress: 'القاهرة - مدينة نصر - شارع عباس العقاد عمارة 12',
+    customerPhone: '01001234567',
+    note: 'التوصيل مساءً',
+    items: [
       {
-        ...DEFAULT_STORE_DATA.products[0],
-        id: `custom-${i}`,
-        code: `AG-C${i}`,
-        nameAr: `منتج مخصص ${i}`,
-        nameEn: `Custom Product ${i}`,
+        productId: 'prod-1',
+        nameAr: 'لابتوب برو',
+        nameEn: 'Pro Laptop',
+        quantity: 2,
+        unitPrice: 40000,
       },
-      false
-    );
+    ],
+    currency: 'ج.م',
+  });
+  assert.equal(valid.ok, true);
+  if (valid.ok) {
+    assert.equal(valid.order.total, 80000);
+    assert.equal(valid.order.status, 'new');
   }
-  assert.equal(list.length, initialCount + 15);
-  assert.equal(list[0].id, 'custom-15');
-
-  // Edit one
-  list = upsertProductList(
-    list,
-    { ...list[0], nameEn: 'Custom Product 15 Edited' },
-    true
-  );
-  assert.equal(list.length, initialCount + 15);
-  assert.equal(list[0].nameEn, 'Custom Product 15 Edited');
-
-  // Delete single and multiple
-  list = removeProductsByIds(list, ['custom-15', 'custom-14', 'custom-13']);
-  assert.equal(list.length, initialCount + 12);
-  assert.equal(filterAdminProducts(list, 'AG-C15').length, 0);
-  assert.equal(filterAdminProducts(list, 'AG-C12').length, 1);
 });
 
-test('sanitizeForFirestore converts undefined, functions, and NaN to null or safe defaults across objects and arrays', () => {
+test('sanitizeForFirestore and sanitizeStoreDataForCloud remove undefined values and preserve defaultLanguage', () => {
   const dirty = {
-    a: 1,
-    b: undefined,
-    fn: () => 'ignored',
-    badNum: Number.NaN,
-    nested: { ok: 'yes', drop: undefined },
-    arr: [{ x: 10, y: undefined }, undefined, () => 42],
+    a: undefined,
+    b: Number.NaN,
+    nested: { ok: 'yes', fn: () => 1 },
   };
   const clean = sanitizeForFirestore(dirty);
-  assert.deepEqual(clean, {
-    a: 1,
-    b: null,
-    fn: null,
-    badNum: 0,
-    nested: { ok: 'yes', drop: null },
-    arr: [{ x: 10, y: null }, null, null],
-  });
-  assert.equal(JSON.stringify(clean).includes('undefined'), false);
-});
+  assert.equal(clean.a, null);
+  assert.equal(clean.b, 0);
+  assert.equal(clean.nested.fn, null);
 
-test('reorderItems moves elements up and down immutably within bounds', () => {
-  const arr = ['p1', 'p2', 'p3'];
-  assert.deepEqual(reorderItems(arr, 1, 'up'), ['p2', 'p1', 'p3']);
-  assert.deepEqual(reorderItems(arr, 1, 'down'), ['p1', 'p3', 'p2']);
-  assert.deepEqual(reorderItems(arr, 0, 'up'), ['p1', 'p2', 'p3']);
-  assert.deepEqual(reorderItems(arr, 2, 'down'), ['p1', 'p2', 'p3']);
-  assert.deepEqual(arr, ['p1', 'p2', 'p3']);
-});
-
-test('toggleWishlistItem toggles product presence and getWishlistProducts resolves matching items', () => {
-  const initial: string[] = [];
-  const p1 = DEFAULT_STORE_DATA.products[0].id;
-  const p2 = DEFAULT_STORE_DATA.products[2].id;
-
-  const addedOne = toggleWishlistItem(initial, p1);
-  assert.deepEqual(addedOne, [p1]);
-  assert.deepEqual(initial, []); // Pure, non-mutating
-
-  const addedTwo = toggleWishlistItem(addedOne, p2);
-  assert.deepEqual(addedTwo, [p1, p2]);
-
-  const savedProducts = getWishlistProducts(DEFAULT_STORE_DATA.products, addedTwo);
-  assert.equal(savedProducts.length, 2);
-  assert.equal(savedProducts[0].id, p1);
-  assert.equal(savedProducts[1].id, p2);
-
-  const removedOne = toggleWishlistItem(addedTwo, p1);
-  assert.deepEqual(removedOne, [p2]);
-  assert.equal(getWishlistProducts(DEFAULT_STORE_DATA.products, removedOne).length, 1);
-});
-
-test('normalizeWebsiteUrl, sanitizeIconUrl, and getEffectiveSiteIdentity validate and resolve branding safely', () => {
-  assert.equal(normalizeWebsiteUrl('ashrafgold.com'), 'https://ashrafgold.com');
-  assert.equal(normalizeWebsiteUrl('https://shop.ashrafgold.com/gold'), 'https://shop.ashrafgold.com/gold');
-  assert.equal(normalizeWebsiteUrl('javascript:alert(1)'), '');
-  assert.equal(normalizeWebsiteUrl('data:text/html,evil'), '');
-  assert.equal(normalizeWebsiteUrl('not a url'), '');
-
-  assert.equal(sanitizeIconUrl('javascript:alert(1)'), '');
-  assert.equal(sanitizeIconUrl('/icon.svg'), '/icon.svg');
-  assert.equal(sanitizeIconUrl('data:image/png;base64,AAA'), 'data:image/png;base64,AAA');
-  assert.equal(sanitizeIconUrl('https://cdn.example.com/logo.png'), 'https://cdn.example.com/logo.png');
-
-  const customized: StoreData = {
-    ...DEFAULT_STORE_DATA,
-    branch: {
-      ...DEFAULT_STORE_DATA.branch,
-      storeNameAr: 'تاج الصاغة',
-      storeNameEn: 'Crown Sagha',
-      websiteUrl: 'crownsagha.com',
-      websiteIconUrl: '',
-      websitePresetIcon: 'gem',
+  const cloud = sanitizeStoreDataForCloud(
+    {
+      settings: {
+        storeNameAr: 'أشرف تك',
+        storeNameEn: 'Ashraf Tech',
+        taglineAr: '',
+        taglineEn: '',
+        siteUrl: '',
+        storeIconUrl: '',
+        defaultLanguage: undefined as unknown as 'ar',
+        currency: 'ج.م',
+        heroTitleAr: '',
+        heroTitleEn: '',
+        heroSubtitleAr: '',
+        heroSubtitleEn: '',
+        promoBannerImageUrl: '',
+        promoBadgeAr: '',
+        promoBadgeEn: '',
+        layoutStyle: 'modern_grid',
+      },
     },
-  };
-
-  const arIdentity = getEffectiveSiteIdentity(customized, 'ar');
-  assert.equal(arIdentity.name, 'تاج الصاغة');
-  assert.equal(arIdentity.url, 'https://crownsagha.com');
-  assert.equal(arIdentity.presetIcon, 'gem');
-  assert.ok(arIdentity.faviconHref.startsWith('data:image/svg+xml;utf8,'));
-
-  const enIdentity = getEffectiveSiteIdentity(customized, 'en');
-  assert.equal(enIdentity.name, 'Crown Sagha');
+    'ar'
+  );
+  assert.equal(cloud.settings.defaultLanguage, 'ar');
+  assert.equal(cloud.adminPin, DEFAULT_ADMIN_PIN);
 });
 
+test('formatWhatsappOrderMessage includes customer name, phone, address, items and total', () => {
+  const msg = formatWhatsappOrderMessage({
+    id: 'ORD-1234',
+    customerName: 'كريم محمود',
+    customerAddress: 'الجيزة - المهندسين - شارع جامعة الدول',
+    customerPhone: '01099887766',
+    note: 'الاتصال قبل الوصول',
+    items: [
+      {
+        productId: 'prod-1',
+        nameAr: 'لابتوب برو',
+        nameEn: 'Pro Laptop',
+        quantity: 1,
+        unitPrice: 78760,
+      },
+    ],
+    total: 78760,
+    currency: 'ج.م',
+    status: 'new',
+    createdAt: '2026-11-25T12:00:00.000Z',
+  });
+  assert.ok(msg.includes('كريم محمود'));
+  assert.ok(msg.includes('01099887766'));
+  assert.ok(msg.includes('78,760'));
+  assert.ok(msg.includes('ORD-1234'));
+});
 
+test('searchCatalogProductsForAI matches bilingual products and deleted history cleanly', () => {
+  const result = searchCatalogProductsForAI('ASUS ROG laptop', DEFAULT_TECH_PRODUCTS, [
+    {
+      id: 'del-mac',
+      nameAr: 'ماك بوك برو M3',
+      nameEn: 'MacBook Pro M3',
+      categoryGroup: 'computers',
+      specsSummary: 'Apple M3 Pro 18GB',
+      deletedAt: '2026-11-20T00:00:00.000Z',
+    },
+  ]);
+  assert.ok(result.matches.some((p) => p.id === 'prod-laptop-razer-pro'));
+
+  const deletedRes = searchCatalogProductsForAI('MacBook M3', DEFAULT_TECH_PRODUCTS, [
+    {
+      id: 'del-mac',
+      nameAr: 'ماك بوك برو M3',
+      nameEn: 'MacBook Pro M3',
+      categoryGroup: 'computers',
+      specsSummary: 'Apple M3 Pro 18GB',
+      deletedAt: '2026-11-20T00:00:00.000Z',
+    },
+  ]);
+  assert.equal(deletedRes.deletedMatches[0]?.id, 'del-mac');
+});
+
+test('normalizeWhatsappDigits and buildWhatsappOrderUrl build valid wa.me links with customer order details', () => {
+  assert.equal(normalizeWhatsappDigits('01025134582'), '201025134582');
+  assert.equal(normalizeWhatsappDigits('+20 102 513 4582'), '201025134582');
+  assert.equal(normalizeWhatsappDigits(''), '201025134582');
+
+  const url = buildWhatsappOrderUrl('01025134582', 'طلب جديد من: أحمد\nالإجمالي: 10,000 ج.م');
+  assert.ok(url.startsWith('https://wa.me/201025134582?text='));
+  assert.ok(decodeURIComponent(url).includes('طلب جديد من: أحمد'));
+});
 

@@ -1,198 +1,165 @@
-import React, { useState } from 'react';
-import { Check, Gem, Heart, MessageCircle, ShoppingBag, ZoomIn } from 'lucide-react';
-import { motion } from 'motion/react';
-import { Language, MarketRates, Product } from '../types/store';
-import { t } from '../utils/i18n';
-import {
-  buildWhatsAppProductUrl,
-  calculateProductPrice,
-  formatCurrency,
-} from '../utils/storeLogic';
+import React, { memo, useState } from 'react';
+import { Expand, PlayCircle, ShoppingCart, Video } from 'lucide-react';
+import { Language, LayoutStyle, Product } from '../types/store';
+import { calculateDiscountedPrice, getCategoryGroupLabel } from '../utils/storeLogic';
 
 interface ProductCardProps {
   product: Product;
-  rates: MarketRates;
   lang: Language;
-  whatsappNumber: string;
-  storeName?: string;
-  isFavorite?: boolean;
-  onToggleFavorite?: (productId: string) => void;
-  onAddToCart: (productId: string) => void;
+  currency: string;
+  layoutStyle?: LayoutStyle;
+  onAddToCart: (product: Product) => void;
   onZoom: (product: Product) => void;
-  index: number;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({
+export const ProductCard: React.FC<ProductCardProps> = memo(({
   product,
-  rates,
   lang,
-  whatsappNumber,
-  storeName,
-  isFavorite = false,
-  onToggleFavorite,
+  currency,
+  layoutStyle = 'modern_grid',
   onAddToCart,
   onZoom,
-  index,
 }) => {
-  const [imgError, setImgError] = useState(false);
-  const [justAdded, setJustAdded] = useState(false);
-  const copy = t(lang);
+  const [showInlineVideo, setShowInlineVideo] = useState(false);
 
-  const price = calculateProductPrice(product, rates, rates.autoLinkPrices);
   const name = lang === 'ar' ? product.nameAr : product.nameEn;
-  const karatLabel =
-    product.metal === 'silver'
-      ? `${copy.silverPrefix} ${product.karat}`
-      : `${copy.karatPrefix} ${product.karat}`;
+  const specs = lang === 'ar' ? product.specsAr : product.specsEn;
+  const finalPrice = calculateDiscountedPrice(product.price, product.discountPercent);
+  const hasDiscount = (product.discountPercent || 0) > 0;
+  const hasVideo = Boolean(product.videoUrl && product.videoUrl.trim());
 
-  const whatsappUrl = buildWhatsAppProductUrl(
-    whatsappNumber,
-    product,
-    price.finalPrice,
-    lang,
-    storeName
-  );
-
-  const handleAdd = () => {
-    onAddToCart(product.id);
-    setJustAdded(true);
-    setTimeout(() => setJustAdded(false), 1100);
-  };
+  const isWide = layoutStyle === 'executive_wide';
 
   return (
-    <motion.article
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{
-        duration: 0.35,
-        delay: Math.min(index * 0.04, 0.28),
-        ease: [0.16, 1, 0.3, 1],
-      }}
-      className="hover-shimmer group flex flex-col overflow-hidden rounded-2xl border border-amber-500/20 bg-[#131A26] transition-transform duration-200 hover:-translate-y-0.5 hover:border-amber-400/45"
+    <article
+      data-testid={`product-card-${product.id}`}
+      className={`tech-surface cv-auto gpu-accelerated group flex ${
+        isWide ? 'flex-col sm:flex-row' : 'flex-col'
+      } overflow-hidden rounded-2xl border shadow-sm transition-transform duration-150 hover:-translate-y-0.5 hover:border-blue-500/45 hover:shadow-lg`}
     >
-      {/* Image Container with Zoom Trigger */}
-      <div className="relative aspect-[4/3] w-full overflow-hidden bg-[#0B0F17]">
-        <button
-          type="button"
-          onClick={() => onZoom(product)}
-          aria-label={`${name} — ${copy.zoomHint}`}
-          className="relative block h-full w-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
-        >
-          {!imgError && product.imageUrl ? (
-            <img
-              src={product.imageUrl}
-              alt={name}
-              referrerPolicy="no-referrer"
-              onError={() => setImgError(true)}
-              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-            />
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-[#1B2435] to-[#0B0F17] p-4 text-amber-400/60">
-              <Gem className="h-10 w-10" />
-              <span className="text-xs text-slate-400 text-center line-clamp-1">{name}</span>
-            </div>
-          )}
+      {/* Media Box */}
+      <div
+        className={`relative overflow-hidden bg-slate-900 ${
+          isWide ? 'aspect-[4/3] sm:w-64 shrink-0' : 'aspect-[4/3] w-full'
+        }`}
+      >
+        {showInlineVideo && hasVideo ? (
+          <video
+            src={product.videoUrl}
+            controls
+            autoPlay
+            playsInline
+            preload="none"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <img
+            src={product.imageUrl}
+            alt={name}
+            loading="lazy"
+            decoding="async"
+            onClick={() => onZoom(product)}
+            className="h-full w-full cursor-pointer object-cover transition-transform duration-200 will-change-transform group-hover:scale-[1.03]"
+          />
+        )}
 
-          {/* Subtle Zoom Hint on Hover */}
-          <span className="pointer-events-none absolute bottom-2.5 end-2.5 flex h-8 w-8 items-center justify-center rounded-lg bg-black/65 text-amber-300 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
-            <ZoomIn className="h-4 w-4" />
-          </span>
-        </button>
-
-        {/* Karat Badge */}
-        <span className="pointer-events-none absolute top-3 start-3 rounded-lg border border-amber-400/40 bg-[#0B0F17]/85 px-2.5 py-1 text-[11px] font-bold text-amber-300 backdrop-blur-sm">
-          {karatLabel}
-        </span>
-
-        {/* Pulsing Discount Badge if active */}
-        {price.hasDiscount && (
-          <span className="pointer-events-none absolute top-3 end-3 animate-pulse rounded-lg bg-gradient-to-r from-rose-600 to-amber-500 px-2.5 py-1 text-[11px] font-bold text-white shadow-md">
-            {copy.discountTag} {product.discountPercent}%
+        {hasDiscount && (
+          <span className="absolute top-2.5 start-2.5 rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-extrabold text-white shadow">
+            -{product.discountPercent}%
           </span>
         )}
 
-        {/* Wishlist Heart Toggle Button */}
-        {onToggleFavorite && (
+        <div className="absolute bottom-2.5 end-2.5 flex items-center gap-1.5">
+          {hasVideo && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowInlineVideo((prev) => !prev);
+              }}
+              aria-label={lang === 'ar' ? 'تشغيل الفيديو الترويجي' : 'Play promo video'}
+              className="inline-flex items-center gap-1 rounded-lg bg-slate-950/80 px-2 py-1 text-[11px] font-bold text-sky-300 backdrop-blur-sm transition hover:bg-blue-600 hover:text-white"
+            >
+              {showInlineVideo ? (
+                <Video className="h-3.5 w-3.5" />
+              ) : (
+                <PlayCircle className="h-3.5 w-3.5" />
+              )}
+              <span>{lang === 'ar' ? (showInlineVideo ? 'الصورة' : 'فيديو') : showInlineVideo ? 'Photo' : 'Video'}</span>
+            </button>
+          )}
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleFavorite(product.id);
-            }}
-            aria-pressed={isFavorite}
-            aria-label={
-              isFavorite
-                ? `${copy.removeFromFavorites}: ${name}`
-                : `${copy.addToFavorites}: ${name}`
-            }
-            className={`absolute bottom-2.5 start-2.5 z-10 flex h-9 w-9 items-center justify-center rounded-xl border backdrop-blur-sm transition active:scale-90 cursor-pointer ${
-              isFavorite
-                ? 'border-rose-400/70 bg-rose-500/25 text-rose-400 shadow-lg shadow-rose-950/40'
-                : 'border-amber-500/30 bg-[#0B0F17]/80 text-slate-200 hover:border-rose-400/60 hover:text-rose-400'
-            }`}
+            onClick={() => onZoom(product)}
+            aria-label={lang === 'ar' ? 'معاينة التفاصيل' : 'Quick preview'}
+            className="rounded-lg bg-slate-950/80 p-1.5 text-white backdrop-blur-sm transition hover:bg-blue-600"
           >
-            <Heart
-              className={`h-4 w-4 transition-transform ${
-                isFavorite ? 'fill-rose-500 text-rose-500 scale-110' : ''
-              }`}
-            />
+            <Expand className="h-3.5 w-3.5" />
           </button>
-        )}
+        </div>
       </div>
 
-      {/* Product Details */}
-      <div className="flex flex-1 flex-col p-4 sm:p-5">
-        {/* Clean Unboxed Metadata */}
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span className="font-mono-tabular">{product.code}</span>
-          <span aria-hidden="true">·</span>
-          <span className="font-mono-tabular">
-            {product.weightGrams} {copy.gram}
-          </span>
-        </div>
-
-        <h2 className="mt-1.5 text-base font-bold leading-snug text-white line-clamp-2">
-          {name}
-        </h2>
-
-        {/* Price Row */}
-        <div className="mt-auto pt-3 flex flex-wrap items-baseline gap-2.5">
-          <span className="font-mono-tabular text-lg font-extrabold text-amber-300">
-            {formatCurrency(price.finalPrice, lang)}
-          </span>
-          {price.hasDiscount && (
-            <span className="font-mono-tabular text-xs text-slate-400 line-through">
-              {formatCurrency(price.originalPrice, lang)}
+      {/* Content */}
+      <div className="flex flex-1 flex-col justify-between p-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide text-blue-500">
+            <span className="truncate">{product.brand || 'Tech Pro'}</span>
+            <span className="tech-text-secondary font-normal">
+              {getCategoryGroupLabel(product.categoryGroup, lang)}
             </span>
-          )}
+          </div>
+
+          <h3
+            onClick={() => onZoom(product)}
+            className="line-clamp-2 cursor-pointer text-sm sm:text-base font-extrabold leading-snug hover:text-blue-500 transition-colors"
+          >
+            {name}
+          </h3>
+
+          <p className="tech-text-secondary line-clamp-2 text-xs leading-relaxed">
+            {specs}
+          </p>
         </div>
 
-        {/* Actions */}
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div className="mt-4 flex items-end justify-between gap-2 border-t border-inherit pt-3">
+          <div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="font-mono-tabular text-base sm:text-lg font-extrabold text-blue-600 dark:text-sky-400">
+                {finalPrice.toLocaleString('en-US')}
+              </span>
+              <span className="text-xs font-bold">{currency}</span>
+            </div>
+            {hasDiscount && (
+              <span className="tech-text-secondary font-mono-tabular text-xs line-through">
+                {product.price.toLocaleString('en-US')} {currency}
+              </span>
+            )}
+          </div>
+
           <button
             type="button"
-            onClick={handleAdd}
-            className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition cursor-pointer ${
-              justAdded
-                ? 'bg-emerald-500 text-slate-950'
-                : 'bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] text-slate-950 hover:brightness-110 active:scale-[0.98]'
+            disabled={!product.inStock}
+            onClick={() => onAddToCart(product)}
+            data-testid={`add-to-cart-${product.id}`}
+            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-extrabold transition ${
+              product.inStock
+                ? 'tech-accent-btn shadow-sm active:scale-[0.98]'
+                : 'cursor-not-allowed bg-slate-500/20 tech-text-secondary'
             }`}
           >
-            {justAdded ? <Check className="h-4 w-4" /> : <ShoppingBag className="h-4 w-4" />}
-            <span>{justAdded ? copy.addedToCart : copy.addToCart}</span>
+            <ShoppingCart className="h-3.5 w-3.5" />
+            <span>
+              {product.inStock
+                ? lang === 'ar'
+                  ? 'أضف للسلة'
+                  : 'Add'
+                : lang === 'ar'
+                  ? 'نفذت الكمية'
+                  : 'Out'}
+            </span>
           </button>
-
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/25 hover:text-emerald-200"
-          >
-            <MessageCircle className="h-4 w-4" />
-            <span>{copy.orderWhatsapp}</span>
-          </a>
         </div>
       </div>
-    </motion.article>
+    </article>
   );
-};
+});

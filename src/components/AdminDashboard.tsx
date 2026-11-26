@@ -1,2010 +1,1811 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  AlertCircle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
-  CloudDownload,
-  Crown,
-  Download,
-  Edit3,
-  FolderKanban,
-  Gem,
+  ClipboardList,
+  Cpu,
   Globe,
-  ImagePlus,
-  Infinity as InfinityIcon,
-  Link2,
-  Loader2,
+  Image as ImageIcon,
+  KeyRound,
+  LayoutGrid,
+  LogOut,
   MapPin,
+  MonitorDown,
   Package,
+  Pencil,
+  Phone,
   Plus,
-  RefreshCw,
   RotateCcw,
   Save,
-  Search,
+  ShieldAlert,
   Sparkles,
-  Star,
   Trash2,
-  TrendingUp,
   Upload,
-  X,
+  Video,
 } from 'lucide-react';
-import { DEFAULT_STORE_DATA } from '../data/defaultStoreData';
 import {
-  BranchInfo,
-  Category,
-  CloudSyncStatus,
-  KaratType,
+  DEFAULT_STORE_DATA,
+  DEFAULT_STORE_ICON_URL,
+  DEFAULT_TECH_PRODUCTS,
+} from '../data/defaultStoreData';
+import {
+  CustomerOrder,
   Language,
-  MarketRates,
-  MetalType,
-  PricingMode,
+  LayoutStyle,
+  OSDownloadItem,
   Product,
-  PromoBannerConfig,
+  ProductCategoryGroup,
+  ProductSubType,
   StoreData,
-  WebsitePresetIcon,
 } from '../types/store';
-import { t } from '../utils/i18n';
 import { compressImageToUnder120KB } from '../utils/imageCompressor';
 import {
-  calculateProductPrice,
-  DEFAULT_WEBSITE_URL,
-  filterAdminProducts,
-  formatCurrency,
-  normalizeWebsiteUrl,
-  removeProductsByIds,
-  reorderItems,
-  sanitizeIconUrl,
-  upsertProductList,
-  validateStoreBackup,
+  applyPermanentProductDelete,
+  isValidAdminPin,
+  restoreDefaultProducts,
 } from '../utils/storeLogic';
 
 interface AdminDashboardProps {
   lang: Language;
   storeData: StoreData;
-  syncStatus: CloudSyncStatus;
+  savingCloud: boolean;
   cloudError: string | null;
-  isRefreshingMarket: boolean;
-  onSaveStoreData: (nextData: StoreData) => Promise<{ ok: boolean; error?: string }>;
-  onUpdateStoreData: (
-    updater: (latest: StoreData) => StoreData
-  ) => Promise<{ ok: boolean; error?: string }>;
-  onFetchFromFirebase: () => Promise<{ ok: boolean; error?: string }>;
-  onRefreshMarketRates: () => Promise<{ ok: boolean; rates?: MarketRates; error?: string }>;
-  onExitAdmin: () => void;
+  onSaveStoreData: (nextData: StoreData, successMsg: string) => Promise<void>;
+  onLogout: () => void;
 }
 
-type AdminTab = 'products' | 'rates' | 'categories' | 'banner' | 'branch';
+type AdminTab = 'orders' | 'products' | 'identity' | 'contacts' | 'branch';
 
-const EMPTY_PRODUCT_FORM = {
-  id: '',
-  code: '',
-  nameAr: '',
-  nameEn: '',
-  categoryId: 'women',
-  metal: 'gold' as MetalType,
-  karat: '21' as KaratType,
-  weightGrams: 5,
-  makingChargePerGram: 180,
-  pricingMode: 'auto' as PricingMode,
-  manualPrice: 20000,
-  discountPercent: 0,
-  imageUrl: '',
-  descriptionAr: '',
-  descriptionEn: '',
-};
+const IMAGE_PRESETS = [
+  {
+    label: 'Gaming Laptop',
+    url: '/src/assets/images/prod_gaming_laptop_1795638128447.jpg',
+  },
+  {
+    label: 'RTX Workstation PC',
+    url: '/src/assets/images/prod_rtx_workstation_pc_1795638127988.jpg',
+  },
+  {
+    label: 'Accessories Bundle',
+    url: '/src/assets/images/prod_accessories_bundle_1795638127995.jpg',
+  },
+  {
+    label: '34" OLED Monitor',
+    url: '/src/assets/images/prod_ultrawide_monitor_1795638127287.jpg',
+  },
+  {
+    label: 'Tech Workstation',
+    url: '/src/assets/images/hero_tech_workstation_1795638127434.jpg',
+  },
+  {
+    label: 'Store Icon 512px',
+    url: '/pwa-512x512.png',
+  },
+];
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   lang,
   storeData,
-  syncStatus,
+  savingCloud,
   cloudError,
-  isRefreshingMarket,
   onSaveStoreData,
-  onUpdateStoreData,
-  onFetchFromFirebase,
-  onRefreshMarketRates,
-  onExitAdmin,
+  onLogout,
 }) => {
-  const copy = t(lang);
-  const [activeTab, setActiveTab] = useState<AdminTab>('products');
-  const [isSaving, setIsSaving] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<AdminTab>('orders');
+  const [aiStatus, setAiStatus] = useState<{ configured: boolean; model: string }>({
+    configured: false,
+    model: 'gemini-4-hydrogen',
+  });
+  const [whatsappStatus, setWhatsappStatus] = useState<{
+    mode: string;
+    automatedChannelConfigured: boolean;
+  }>({
+    mode: 'background_queue',
+    automatedChannelConfigured: false,
+  });
+  const [statusMessage, setStatusMessage] = useState('');
 
-  // Product Form & Unlimited Management State
-  const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM);
-  const [isEditingProduct, setIsEditingProduct] = useState(false);
-  const [compressedInfo, setCompressedInfo] = useState<string | null>(null);
-  const [adminProductSearch, setAdminProductSearch] = useState('');
-  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-  const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
-  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  // Product Form State
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [pNameAr, setPNameAr] = useState('');
+  const [pNameEn, setPNameEn] = useState('');
+  const [pBrand, setPBrand] = useState('');
+  const [pSku, setPSku] = useState('');
+  const [pSpecsAr, setPSpecsAr] = useState('');
+  const [pSpecsEn, setPSpecsEn] = useState('');
+  const [pCategoryGroup, setPCategoryGroup] = useState<ProductCategoryGroup>('computers');
+  const [pSubType, setPSubType] = useState<ProductSubType>('laptop');
+  const [pPrice, setPPrice] = useState('');
+  const [pDiscount, setPDiscount] = useState('0');
+  const [pInStock, setPInStock] = useState(true);
+  const [pImageUrl, setPImageUrl] = useState(IMAGE_PRESETS[0].url);
+  const [pVideoUrl, setPVideoUrl] = useState('');
+  const [uploadingVideo, setUploadingVideo] = useState(false);
 
-  // Rates Form State
-  const [ratesForm, setRatesForm] = useState<MarketRates>(storeData.rates);
+  // Identity & Wallpapers Draft
+  const [identityDraft, setIdentityDraft] = useState(storeData.settings);
+  const [newWpLabelAr, setNewWpLabelAr] = useState('');
+  const [newWpLabelEn, setNewWpLabelEn] = useState('');
 
-  // Categories Form State
-  const [newCatAr, setNewCatAr] = useState('');
-  const [newCatEn, setNewCatEn] = useState('');
-  const [newCatIcon, setNewCatIcon] = useState('sparkles');
-  const [editingCatId, setEditingCatId] = useState<string | null>(null);
-  const [editingCatAr, setEditingCatAr] = useState('');
-  const [editingCatEn, setEditingCatEn] = useState('');
+  // Contacts, Social, OS Downloads Draft
+  const [branchDraft, setBranchDraft] = useState(storeData.branch);
+  const [socialDraft, setSocialDraft] = useState(storeData.socialLinks);
+  const [newOsTitleAr, setNewOsTitleAr] = useState('');
+  const [newOsTitleEn, setNewOsTitleEn] = useState('');
+  const [newOsVendor, setNewOsVendor] = useState<OSDownloadItem['vendor']>('Microsoft');
+  const [newOsVersion, setNewOsVersion] = useState('');
+  const [newOsUrl, setNewOsUrl] = useState('');
 
-  // Banner Form State
-  const [bannerForm, setBannerForm] = useState<PromoBannerConfig>(storeData.banner);
-
-  // Branch Form State
-  const [branchForm, setBranchForm] = useState<BranchInfo>(storeData.branch);
-  const [defaultLangForm, setDefaultLangForm] = useState<Language>(
-    storeData.defaultLanguage || 'ar'
-  );
-  const [iconPreviewFailed, setIconPreviewFailed] = useState(false);
+  // Security PIN Change Draft
+  const [newPin, setNewPin] = useState(storeData.adminPin);
+  const [confirmPin, setConfirmPin] = useState(storeData.adminPin);
 
   useEffect(() => {
-    setIconPreviewFailed(false);
-  }, [branchForm.websiteIconUrl]);
+    setIdentityDraft(storeData.settings);
+    setBranchDraft(storeData.branch);
+    setSocialDraft(storeData.socialLinks);
+  }, [storeData.settings, storeData.branch, storeData.socialLinks]);
 
   useEffect(() => {
-    setRatesForm(storeData.rates);
-    setBannerForm(storeData.banner);
-    setBranchForm(storeData.branch);
-    if (storeData.defaultLanguage) {
-      setDefaultLangForm(storeData.defaultLanguage);
-    }
-    setSelectedProductIds((prev) =>
-      prev.filter((id) => storeData.products.some((p) => p.id === id))
-    );
-  }, [storeData]);
-
-  const importInputRef = useRef<HTMLInputElement>(null);
-
-  const syncLocalForms = (data: StoreData) => {
-    setRatesForm(data.rates);
-    setBannerForm(data.banner);
-    setBranchForm(data.branch);
-  };
-
-  const commitToCloud = async (nextData: StoreData, successMsg: string) => {
-    setIsSaving(true);
-    setStatusMessage(null);
-    const res = await onSaveStoreData({
-      ...nextData,
-      updatedAt: new Date().toISOString(),
-    });
-    setIsSaving(false);
-    if (res.ok) {
-      syncLocalForms(nextData);
-      setStatusMessage({ type: 'success', text: successMsg });
-    } else {
-      setStatusMessage({
-        type: 'error',
-        text: res.error || (lang === 'ar' ? 'حدث خطأ أثناء الحفظ في سحابة Firebase.' : 'Failed to save to Firebase Cloud.'),
+    fetch('/api/assistant/status')
+      .then((r) => r.json())
+      .then((d: { configured?: boolean; model?: string }) => {
+        setAiStatus({
+          configured: Boolean(d.configured),
+          model: d.model || 'gemini-4-hydrogen',
+        });
+      })
+      .catch(() => {
+        // Ignore silent status check error
       });
-    }
-  };
 
-  const commitMutatedToCloud = async (
-    updater: (latest: StoreData) => StoreData,
-    successMsg: string
-  ) => {
-    setIsSaving(true);
-    setStatusMessage(null);
-    const res = await onUpdateStoreData(updater);
-    setIsSaving(false);
-    if (res.ok) {
-      setStatusMessage({ type: 'success', text: successMsg });
-    } else {
-      setStatusMessage({
-        type: 'error',
-        text: res.error || (lang === 'ar' ? 'حدث خطأ أثناء الحفظ في سحابة Firebase.' : 'Failed to save to Firebase Cloud.'),
+    fetch('/api/orders/whatsapp-status')
+      .then((r) => r.json())
+      .then((d: { mode?: string; automatedChannelConfigured?: boolean }) => {
+        setWhatsappStatus({
+          mode: d.mode || 'background_queue',
+          automatedChannelConfigured: Boolean(d.automatedChannelConfigured),
+        });
+      })
+      .catch(() => {
+        // Ignore silent status check error
       });
-    }
-    return res.ok;
+  }, []);
+
+  const flashNotice = (msg: string) => {
+    setStatusMessage(msg);
+    setTimeout(() => setStatusMessage(''), 4000);
   };
 
-  const handleFetchCloud = async () => {
-    setStatusMessage(null);
-    const res = await onFetchFromFirebase();
-    if (res.ok) {
-      setStatusMessage({
-        type: 'success',
-        text: 'تم جلب أحدث البيانات من Firebase بنجاح ومزامنتها.',
-      });
-    } else {
-      setStatusMessage({
-        type: 'error',
-        text: res.error || 'تعذر جلب البيانات من Firebase.',
-      });
-    }
+  const resetProductForm = () => {
+    setEditingProductId(null);
+    setPNameAr('');
+    setPNameEn('');
+    setPBrand('');
+    setPSku('');
+    setPSpecsAr('');
+    setPSpecsEn('');
+    setPCategoryGroup('computers');
+    setPSubType('laptop');
+    setPPrice('');
+    setPDiscount('0');
+    setPInStock(true);
+    setPImageUrl(IMAGE_PRESETS[0].url);
+    setPVideoUrl('');
   };
 
-  const handleExportJson = () => {
-    const blob = new Blob([JSON.stringify(storeData, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `ashraf-gold-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const startEditingProduct = (p: Product) => {
+    setEditingProductId(p.id);
+    setPNameAr(p.nameAr);
+    setPNameEn(p.nameEn);
+    setPBrand(p.brand);
+    setPSku(p.sku);
+    setPSpecsAr(p.specsAr);
+    setPSpecsEn(p.specsEn);
+    setPCategoryGroup(p.categoryGroup);
+    setPSubType(p.subType);
+    setPPrice(String(p.price));
+    setPDiscount(String(p.discountPercent || 0));
+    setPInStock(p.inStock);
+    setPImageUrl(p.imageUrl);
+    setPVideoUrl(p.videoUrl || '');
+    setActiveTab('products');
   };
 
-  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleProductImageUpload = async (file: File | undefined) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const check = validateStoreBackup(String(reader.result || ''));
-      if (!check.ok) {
-        setStatusMessage({ type: 'error', text: check.error });
-        return;
+    try {
+      const { dataUrl } = await compressImageToUnder120KB(file);
+      setPImageUrl(dataUrl);
+      flashNotice(lang === 'ar' ? 'تم ضغط الصورة وتجهيزها بنجاح.' : 'Image compressed cleanly.');
+    } catch (err) {
+      flashNotice(err instanceof Error ? err.message : 'Failed to compress image.');
+    }
+  };
+
+  const handleProductVideoUpload = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      flashNotice(
+        lang === 'ar'
+          ? 'حجم الفيديو يتجاوز 25 ميجابايت.'
+          : 'Video file size exceeds 25MB limit.'
+      );
+      return;
+    }
+    setUploadingVideo(true);
+    try {
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'video/mp4',
+        },
+        body: file,
+      });
+      const data = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || 'Video upload failed.');
       }
-      await commitToCloud(check.data, 'تم استيراد نسخة المتجر ونشرها على السحابة بنجاح.');
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  // Image Upload Compression (<120KB)
-  const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const { dataUrl, sizeKB } = await compressImageToUnder120KB(file);
-      setProductForm((prev) => ({ ...prev, imageUrl: dataUrl }));
-      setCompressedInfo(`تم ضغط الصورة بنجاح (${sizeKB} KB) وجاهزة للحفظ السحابي.`);
+      setPVideoUrl(data.url);
+      flashNotice(
+        lang === 'ar'
+          ? 'تم رفع الفيديو الترويجي بنجاح! اضغط حفظ المنتج لاعتماده.'
+          : 'Promo video uploaded cleanly! Save product to apply.'
+      );
     } catch (err) {
-      setStatusMessage({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'فشل ضغط الصورة.',
-      });
-    }
-  };
-
-  const handleBannerImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const { dataUrl, sizeKB } = await compressImageToUnder120KB(file);
-      setBannerForm((prev) => ({ ...prev, imageUrl: dataUrl }));
-      setStatusMessage({
-        type: 'success',
-        text: `تم ضغط صورة البنر (${sizeKB} KB). اضغط "حفظ ونشر فوري" لاعتمادها.`,
-      });
-    } catch (err) {
-      setStatusMessage({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'فشل ضغط صورة البنر.',
-      });
-    }
-  };
-
-  const handleWebsiteIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const { dataUrl, sizeKB } = await compressImageToUnder120KB(file);
-      setBranchForm((prev) => ({ ...prev, websiteIconUrl: dataUrl }));
-      setStatusMessage({
-        type: 'success',
-        text:
-          lang === 'ar'
-            ? `تم ضغط أيقونة الموقع (${sizeKB} KB). اضغط "حفظ ونشر فوري" لاعتمادها عالمياً.`
-            : `Website icon compressed (${sizeKB} KB). Click "Save & Publish Live" to apply worldwide.`,
-      });
-    } catch (err) {
-      setStatusMessage({
-        type: 'error',
-        text:
-          err instanceof Error
-            ? err.message
-            : lang === 'ar'
-              ? 'فشل ضغط أيقونة الموقع.'
-              : 'Failed to compress website icon.',
-      });
+      flashNotice(err instanceof Error ? err.message : 'Video upload failed.');
     } finally {
-      e.target.value = '';
+      setUploadingVideo(false);
     }
   };
 
-  // Product Submit (Unlimited daily additions & edits)
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    const rawAr = productForm.nameAr.trim();
-    const rawEn = productForm.nameEn.trim();
-    if (!rawAr && !rawEn) {
-      setStatusMessage({
-        type: 'error',
-        text:
-          lang === 'ar'
-            ? 'يرجى إدخال اسم المنتج بالعربية أو الإنجليزية على الأقل.'
-            : 'Please enter a product name (Arabic or English).',
-      });
+    const numericPrice = Math.max(0, Number(pPrice) || 0);
+    const numericDiscount = Math.min(95, Math.max(0, Number(pDiscount) || 0));
+    if (!pNameAr.trim() || numericPrice <= 0) {
+      flashNotice(
+        lang === 'ar'
+          ? 'يرجى إدخال اسم المنتج وسعر صالح.'
+          : 'Please enter a product name and valid price.'
+      );
       return;
     }
 
-    const resolvedNameAr = rawAr || rawEn;
-    const resolvedNameEn = rawEn || rawAr;
+    const existing = editingProductId
+      ? storeData.products.find((p) => p.id === editingProductId)
+      : undefined;
 
-    const code =
-      productForm.code.trim() ||
-      `AG-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const newProduct: Product = {
-      id: isEditingProduct ? productForm.id : `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      code,
-      nameAr: resolvedNameAr,
-      nameEn: resolvedNameEn,
-      categoryId: productForm.categoryId,
-      metal: productForm.metal,
-      karat: productForm.karat,
-      weightGrams: Number(productForm.weightGrams) || 0,
-      makingChargePerGram: Number(productForm.makingChargePerGram) || 0,
-      pricingMode: productForm.pricingMode,
-      manualPrice: Number(productForm.manualPrice) || 0,
-      discountPercent: Math.min(90, Math.max(0, Number(productForm.discountPercent) || 0)),
-      imageUrl:
-        productForm.imageUrl.trim() ||
-        '/src/assets/images/product_womens_gold_set_1795458830291.jpg',
-      descriptionAr: productForm.descriptionAr.trim(),
-      descriptionEn: productForm.descriptionEn.trim(),
+    const productPayload: Product = {
+      id: editingProductId || `prod-${Date.now().toString(36)}`,
+      sku: pSku.trim() || `TECH-${Date.now().toString().slice(-4)}`,
+      nameAr: pNameAr.trim(),
+      nameEn: pNameEn.trim() || pNameAr.trim(),
+      brand: pBrand.trim() || 'Tech Pro',
+      specsAr: pSpecsAr.trim() || pNameAr.trim(),
+      specsEn: pSpecsEn.trim() || pSpecsAr.trim() || pNameEn.trim() || pNameAr.trim(),
+      categoryGroup: pCategoryGroup,
+      subType: pSubType,
+      price: numericPrice,
+      discountPercent: numericDiscount,
+      inStock: pInStock,
+      isFeatured: existing?.isFeatured ?? true,
+      isDefault: existing?.isDefault ?? false,
+      imageUrl: pImageUrl.trim() || IMAGE_PRESETS[0].url,
+      videoUrl: pVideoUrl.trim() || '',
+      createdAt: existing?.createdAt || new Date().toISOString(),
     };
 
-    const success = await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        products: upsertProductList(latest.products, newProduct, isEditingProduct),
-      }),
-      isEditingProduct
+    const nextProducts = editingProductId
+      ? storeData.products.map((p) => (p.id === editingProductId ? productPayload : p))
+      : [productPayload, ...storeData.products];
+
+    await onSaveStoreData(
+      {
+        ...storeData,
+        products: nextProducts,
+      },
+      editingProductId
         ? lang === 'ar'
-          ? 'تم تعديل المنتج ونشره فوراً لجميع المستخدمين.'
-          : 'Product updated and published instantaneously to all users.'
+          ? 'تم تحديث المنتج ومزامنته سحابياً بنجاح.'
+          : 'Product updated & synced cleanly.'
         : lang === 'ar'
-          ? 'تمت إضافة المنتج الجديد ونشره فوراً على السحابة.'
-          : 'New product added and published instantaneously to Firebase Cloud.'
+          ? 'تمت إضافة المنتج الجديد ونشره فوراً لجميع الزوار.'
+          : 'Product added & published live.'
     );
+    resetProductForm();
+  };
 
-    if (success) {
-      setProductForm(EMPTY_PRODUCT_FORM);
-      setIsEditingProduct(false);
-      setCompressedInfo(null);
+  const handlePermanentDeleteProduct = async (productId: string) => {
+    const result = applyPermanentProductDelete(
+      storeData.products,
+      storeData.deletedDefaultIds,
+      storeData.deletedProductsHistory,
+      [productId]
+    );
+    await onSaveStoreData(
+      {
+        ...storeData,
+        products: result.products,
+        deletedDefaultIds: result.deletedDefaultIds,
+        deletedProductsHistory: result.deletedProductsHistory,
+      },
+      lang === 'ar'
+        ? 'تم حذف المنتج نهائياً وتحديث سجل خدمة العملاء الذكية.'
+        : 'Product permanently deleted & AI out-of-stock log updated.'
+    );
+  };
+
+  const handleRestoreDefaults = async () => {
+    const restored = restoreDefaultProducts(storeData.products, DEFAULT_TECH_PRODUCTS);
+    await onSaveStoreData(
+      {
+        ...storeData,
+        products: restored.products,
+        deletedDefaultIds: restored.deletedDefaultIds,
+      },
+      lang === 'ar'
+        ? 'تمت استعادة جميع المنتجات الافتراضية بنجاح.'
+        : 'Default products restored cleanly.'
+    );
+  };
+
+  const handleMoveProduct = async (index: number, delta: number) => {
+    const targetIdx = index + delta;
+    if (targetIdx < 0 || targetIdx >= storeData.products.length) return;
+    const copy = [...storeData.products];
+    const [moved] = copy.splice(index, 1);
+    copy.splice(targetIdx, 0, moved);
+    await onSaveStoreData(
+      { ...storeData, products: copy },
+      lang === 'ar' ? 'تم تحديث ترتيب المنتجات.' : 'Product order updated.'
+    );
+  };
+
+  const handleUpdateOrderStatus = async (
+    orderId: string,
+    nextStatus: CustomerOrder['status']
+  ) => {
+    const nextOrders = storeData.orders.map((o) =>
+      o.id === orderId ? { ...o, status: nextStatus } : o
+    );
+    await onSaveStoreData(
+      { ...storeData, orders: nextOrders },
+      lang === 'ar' ? 'تم تحديث حالة الطلب.' : 'Order status updated.'
+    );
+  };
+
+  const handleDeleteOrder = async (orderId: string) => {
+    const nextOrders = storeData.orders.filter((o) => o.id !== orderId);
+    await onSaveStoreData(
+      { ...storeData, orders: nextOrders },
+      lang === 'ar' ? 'تم حذف سجل الطلب.' : 'Order removed.'
+    );
+  };
+
+  const handleUploadStoreIcon = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const { dataUrl } = await compressImageToUnder120KB(file);
+      setIdentityDraft((prev) => ({ ...prev, storeIconUrl: dataUrl }));
+      flashNotice(lang === 'ar' ? 'تم تجهيز أيقونة المتجر.' : 'Store icon ready.');
+    } catch (err) {
+      flashNotice(err instanceof Error ? err.message : 'Icon compression failed.');
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    setDeletingProductId(id);
-    if (isEditingProduct && productForm.id === id) {
-      setProductForm(EMPTY_PRODUCT_FORM);
-      setIsEditingProduct(false);
-      setCompressedInfo(null);
-    }
-    await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        products: removeProductsByIds(latest.products, [id]),
-      }),
-      lang === 'ar'
-        ? 'تم حذف المنتج ومزامنة التحديث فوراً مع الجميع على السحابة.'
-        : 'Product deleted and synced immediately for all users.'
-    );
-    setSelectedProductIds((prev) => prev.filter((item) => item !== id));
-    setDeletingProductId(null);
-  };
-
-  const handleBulkDeleteSelected = async () => {
-    if (selectedProductIds.length === 0) return;
-    const count = selectedProductIds.length;
-    if (isEditingProduct && selectedProductIds.includes(productForm.id)) {
-      setProductForm(EMPTY_PRODUCT_FORM);
-      setIsEditingProduct(false);
-    }
-    const ok = await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        products: removeProductsByIds(latest.products, selectedProductIds),
-      }),
-      lang === 'ar'
-        ? `تم حذف ${count} منتجاً ومزامنة المتجر فوراً لجميع الزوار.`
-        : `Deleted ${count} selected products and synced live to all users.`
-    );
-    if (ok) {
-      setSelectedProductIds([]);
-    }
-  };
-
-  const handleDeleteAllProducts = async () => {
-    setConfirmClearAll(false);
-    setProductForm(EMPTY_PRODUCT_FORM);
-    setIsEditingProduct(false);
-    setSelectedProductIds([]);
-    await commitMutatedToCloud(
-      (latest) => ({ ...latest, products: [] }),
-      lang === 'ar'
-        ? 'تم حذف جميع المنتجات ونشر التحديث فوراً على السحابة.'
-        : 'All products deleted and synced instantaneously to Firebase Cloud.'
-    );
-  };
-
-  const handleRestoreDefaultProducts = async () => {
-    setConfirmClearAll(false);
-    await commitMutatedToCloud(
-      (latest) => ({ ...latest, products: DEFAULT_STORE_DATA.products }),
-      lang === 'ar'
-        ? 'تمت استعادة المنتجات الافتراضية ونشرها فوراً على السحابة.'
-        : 'Default products restored and published instantaneously to Firebase Cloud.'
-    );
-  };
-
-  const filteredAdminProducts = filterAdminProducts(
-    storeData.products,
-    adminProductSearch
-  );
-
-  const handleMoveProduct = async (productId: string, direction: 'up' | 'down') => {
-    await commitMutatedToCloud((latest) => {
-      const idx = latest.products.findIndex((p) => p.id === productId);
-      return {
-        ...latest,
-        products: reorderItems(latest.products, idx, direction),
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
+  const handleUploadWallpaper = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const { dataUrl } = await compressImageToUnder120KB(file);
+      const nextWp = {
+        id: `wp-${Date.now()}`,
+        labelAr: newWpLabelAr.trim() || 'خلفية مخصصة',
+        labelEn: newWpLabelEn.trim() || 'Custom Wallpaper',
+        imageUrl: dataUrl,
       };
-    }, lang === 'ar' ? 'تم تحديث ترتيب المنتجات وحفظه في السحابة بنجاح.' : 'Product order updated and saved to Firebase Cloud.');
-  };
-
-  const handleSaveRates = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const updatedRates: MarketRates = {
-      ...ratesForm,
-      lastUpdated: new Date().toISOString(),
-    };
-    await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        rates: updatedRates,
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      }),
-      lang === 'ar'
-        ? 'تم حفظ أسعار البورصة ونشرها فوراً على جميع الأجهزة.'
-        : 'Market rates saved and published instantaneously to all devices.'
-    );
-  };
-
-  const handleSpotRefreshInAdmin = async () => {
-    const res = await onRefreshMarketRates();
-    if (res.ok && res.rates) {
-      setRatesForm(res.rates);
-      setStatusMessage({
-        type: 'success',
-        text:
-          lang === 'ar'
-            ? 'تم جلب أحدث أسعار البورصة العالمية وحفظها على السحابة.'
-            : 'Latest global market rates fetched and saved to Firebase Cloud.',
-      });
-    } else if (res.error) {
-      setStatusMessage({ type: 'error', text: res.error });
+      await onSaveStoreData(
+        {
+          ...storeData,
+          wallpapers: [nextWp, ...storeData.wallpapers],
+        },
+        lang === 'ar' ? 'تم رفع الخلفية وإتاحتها للزوار.' : 'Wallpaper uploaded & published.'
+      );
+      setNewWpLabelAr('');
+      setNewWpLabelEn('');
+    } catch (err) {
+      flashNotice(err instanceof Error ? err.message : 'Wallpaper upload failed.');
     }
   };
 
-  const handleAddCategory = async (e: React.FormEvent) => {
+  const handleDeleteWallpaper = async (wpId: string) => {
+    await onSaveStoreData(
+      {
+        ...storeData,
+        wallpapers: storeData.wallpapers.filter((w) => w.id !== wpId),
+      },
+      lang === 'ar' ? 'تم حذف الخلفية.' : 'Wallpaper removed.'
+    );
+  };
+
+  const handleAddOsDownload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCatAr.trim() || !newCatEn.trim()) {
-      setStatusMessage({
-        type: 'error',
-        text:
-          lang === 'ar'
-            ? 'يرجى إدخال اسم الفئة بالعربية والإنجليزية.'
-            : 'Please enter category name in Arabic and English.',
-      });
+    if (!newOsTitleAr.trim() || !newOsUrl.trim()) return;
+    const item: OSDownloadItem = {
+      id: `os-${Date.now()}`,
+      titleAr: newOsTitleAr.trim(),
+      titleEn: newOsTitleEn.trim() || newOsTitleAr.trim(),
+      vendor: newOsVendor,
+      version: newOsVersion.trim() || 'Latest Official',
+      sizeLabel: 'Official Link',
+      descriptionAr: 'رابط رسمي مضاف من لوحة الإدارة.',
+      descriptionEn: 'Official link configured by Store Admin.',
+      officialUrl: newOsUrl.trim(),
+    };
+    await onSaveStoreData(
+      {
+        ...storeData,
+        osDownloads: [...storeData.osDownloads, item],
+      },
+      lang === 'ar' ? 'تمت إضافة رابط التحديث الرسمي.' : 'Official download added.'
+    );
+    setNewOsTitleAr('');
+    setNewOsTitleEn('');
+    setNewOsVersion('');
+    setNewOsUrl('');
+  };
+
+  const handleDeleteOsDownload = async (id: string) => {
+    await onSaveStoreData(
+      {
+        ...storeData,
+        osDownloads: storeData.osDownloads.filter((o) => o.id !== id),
+      },
+      lang === 'ar' ? 'تم حذف رابط التحميل.' : 'Download link removed.'
+    );
+  };
+
+  const handleUpdatePin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isValidAdminPin(newPin)) {
+      flashNotice(
+        lang === 'ar'
+          ? 'يجب أن يتكون الرمز السري من 10 أرقام بالضبط.'
+          : 'Admin PIN must be exactly 10 digits.'
+      );
       return;
     }
-    const newCat: Category = {
-      id: `cat-${Date.now()}`,
-      nameAr: newCatAr.trim(),
-      nameEn: newCatEn.trim(),
-      icon: newCatIcon,
-    };
-    const ok = await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        categories: [...latest.categories, newCat],
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      }),
-      lang === 'ar'
-        ? 'تمت إضافة الفئة الجديدة ونشرها على السحابة.'
-        : 'New category added and published to Firebase Cloud.'
-    );
-    if (ok) {
-      setNewCatAr('');
-      setNewCatEn('');
-    }
-  };
-
-  const handleSaveCategoryEdit = async (catId: string) => {
-    if (!editingCatAr.trim() || !editingCatEn.trim()) return;
-    const ok = await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        categories: latest.categories.map((c) =>
-          c.id === catId ? { ...c, nameAr: editingCatAr.trim(), nameEn: editingCatEn.trim() } : c
-        ),
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      }),
-      lang === 'ar'
-        ? 'تم تعديل اسم الفئة ومزامنتها فوراً.'
-        : 'Category updated and synced instantaneously.'
-    );
-    if (ok) {
-      setEditingCatId(null);
-    }
-  };
-
-  const handleMoveCategory = async (catId: string, direction: 'up' | 'down') => {
-    await commitMutatedToCloud((latest) => {
-      const idx = latest.categories.findIndex((c) => c.id === catId);
-      return {
-        ...latest,
-        categories: reorderItems(latest.categories, idx, direction),
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      };
-    }, lang === 'ar' ? 'تم تحديث ترتيب الفئات وحفظه في السحابة بنجاح.' : 'Category order updated and saved to Firebase Cloud.');
-  };
-
-  const handleDeleteCategory = async (catId: string) => {
-    await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        categories: latest.categories.filter((c) => c.id !== catId),
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      }),
-      lang === 'ar'
-        ? 'تم حذف الفئة ومزامنة المتجر بنجاح.'
-        : 'Category deleted and synced instantaneously.'
-    );
-  };
-
-  const handleSaveBanner = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        banner: bannerForm,
-        defaultLanguage: latest.defaultLanguage || defaultLangForm || lang || 'ar',
-      }),
-      lang === 'ar'
-        ? 'تم حفظ إعدادات البنر والعروض ونشرها فوراً.'
-        : 'Banner and offer settings saved and published instantaneously.'
-    );
-  };
-
-  const handleSaveBranch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const rawUrl = (branchForm.websiteUrl || '').trim();
-    const normalizedUrl = rawUrl ? normalizeWebsiteUrl(rawUrl) : DEFAULT_WEBSITE_URL;
-    if (rawUrl && !normalizedUrl) {
-      setStatusMessage({
-        type: 'error',
-        text:
-          lang === 'ar'
-            ? 'رابط الموقع غير صالح. يرجى إدخال رابط يبدأ بـ https:// مثل https://ashrafgold.com'
-            : 'Invalid website URL. Please enter a valid link such as https://ashrafgold.com',
-      });
+    if (newPin !== confirmPin) {
+      flashNotice(
+        lang === 'ar' ? 'الرقمان غير متطابقين.' : 'PIN confirmation does not match.'
+      );
       return;
     }
-
-    const rawIconUrl = (branchForm.websiteIconUrl || '').trim();
-    const cleanIconUrl = rawIconUrl ? sanitizeIconUrl(rawIconUrl) : '';
-    if (rawIconUrl && !cleanIconUrl) {
-      setStatusMessage({
-        type: 'error',
-        text:
-          lang === 'ar'
-            ? 'رابط أيقونة الموقع غير صالح. استخدم رابط صورة https:// أو ارفع صورة من جهازك.'
-            : 'Invalid website icon URL. Please provide an https:// image link or upload an image file.',
-      });
-      return;
-    }
-
-    const nextBranch: BranchInfo = {
-      ...branchForm,
-      storeNameAr: branchForm.storeNameAr.trim() || DEFAULT_STORE_DATA.branch.storeNameAr,
-      storeNameEn: branchForm.storeNameEn.trim() || DEFAULT_STORE_DATA.branch.storeNameEn,
-      websiteUrl: normalizedUrl,
-      websiteIconUrl: cleanIconUrl,
-      websitePresetIcon: branchForm.websitePresetIcon || 'crown',
-    };
-
-    const safeDefaultLang: Language = defaultLangForm || lang || 'ar';
-    const ok = await commitMutatedToCloud(
-      (latest) => ({
-        ...latest,
-        branch: nextBranch,
-        defaultLanguage: safeDefaultLang,
-      }),
+    await onSaveStoreData(
+      {
+        ...storeData,
+        branch: branchDraft,
+        adminPin: newPin.trim(),
+      },
       lang === 'ar'
-        ? 'تم تحديث اسم ورابط وأيقونة الموقع وبيانات الفرع ونشرها فوراً على السحابة.'
-        : 'Website name, link, icon, and branch details updated and published live.'
+        ? 'تم حفظ بيانات الفرع وتحديث الرمز السري المكون من 10 أرقام.'
+        : 'Branch info and 10-digit PIN updated cleanly.'
     );
-    if (ok) {
-      setBranchForm(nextBranch);
-    }
   };
+
+  const newOrdersCount = storeData.orders.filter((o) => o.status === 'new').length;
 
   return (
-    <div className="mx-auto max-w-7xl px-3 py-6 pb-28 sm:px-6">
-      {/* Top Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <section
+      className="mx-auto max-w-6xl space-y-5 px-3 py-5 sm:px-6"
+      data-testid="admin-dashboard"
+    >
+      {/* Admin Header */}
+      <div className="tech-surface flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 shadow-sm">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-amber-300">
-            {((lang === 'ar' ? storeData.branch.storeNameAr : storeData.branch.storeNameEn).trim() ||
-              (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold'))}{' '}
-            — {lang === 'ar' ? 'لوحة التحكم السحابية' : 'Cloud Admin'}
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
+          <h2 className="text-lg font-extrabold flex items-center gap-2">
+            <Cpu className="h-5 w-5 text-blue-500" />
+            <span>{lang === 'ar' ? 'لوحة الإدارة السحابية' : 'Cloud Admin Panel'}</span>
+          </h2>
+          <p className="tech-text-secondary text-xs">
             {lang === 'ar'
-              ? 'إدارة مركزية سحابية لحظية — Cloud Firestore Live Sync'
-              : 'Real-time Cloud Firestore Store Management'}
+              ? 'جميع التعديلات تُحفظ وتظهر فوراً على كل الأجهزة عبر Firebase Firestore.'
+              : 'Every change syncs in real time across all customer devices via Firebase Firestore.'}
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onExitAdmin}
-          className="flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-[#131A26] px-4 py-2 text-xs sm:text-sm font-bold text-slate-200 hover:border-amber-400 hover:text-white cursor-pointer"
-        >
-          <X className="h-4 w-4" />
-          <span>{copy.adminExit}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {savingCloud && (
+            <span className="rounded-lg bg-blue-600/15 px-3 py-1.5 text-xs font-bold text-blue-500">
+              {lang === 'ar' ? 'جاري المزامنة...' : 'Syncing...'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onLogout}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3.5 py-2 text-xs font-bold text-rose-500 hover:bg-rose-500/20"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>{lang === 'ar' ? 'قفل الإدارة' : 'Lock Admin'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Cloud Status Card */}
-      <section className="rounded-2xl border border-amber-500/30 bg-[#131A26] p-5 sm:p-6 shadow-xl mb-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-2">
-            <div className="text-sm sm:text-base font-bold text-amber-400">
-              {copy.projectConnected} <span className="font-mono-tabular">ashraf-gold</span>
-            </div>
-
-            <div
-              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs sm:text-sm font-semibold ${
-                syncStatus === 'error' || cloudError
-                  ? 'border-rose-500/35 bg-rose-500/10 text-rose-300'
-                  : 'border-emerald-500/35 bg-emerald-500/15 text-emerald-300'
-              }`}
-            >
-              {syncStatus === 'error' || cloudError ? (
-                <AlertCircle className="h-4 w-4 shrink-0" />
-              ) : (
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-              )}
-              <span>
-                {cloudError
-                  ? cloudError
-                  : copy.cloudActiveBanner}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2.5">
-            <button
-              type="button"
-              onClick={handleFetchCloud}
-              className="flex min-h-[42px] items-center gap-2 rounded-xl bg-[#2563EB] px-4 py-2 text-xs sm:text-sm font-bold text-white shadow hover:bg-blue-500 cursor-pointer"
-            >
-              <CloudDownload className="h-4 w-4" />
-              <span>{copy.fetchLatestFirebase}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleExportJson}
-              className="flex min-h-[42px] items-center gap-2 rounded-xl bg-[#10B981] px-4 py-2 text-xs sm:text-sm font-bold text-white shadow hover:bg-emerald-500 cursor-pointer"
-            >
-              <Download className="h-4 w-4" />
-              <span>{copy.exportJson}</span>
-            </button>
-
-            <input
-              ref={importInputRef}
-              type="file"
-              accept="application/json"
-              onChange={handleImportJson}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => importInputRef.current?.click()}
-              className="flex min-h-[42px] items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/15 px-4 py-2 text-xs sm:text-sm font-bold text-amber-200 hover:bg-amber-500/25 cursor-pointer"
-            >
-              <Upload className="h-4 w-4" />
-              <span>{copy.importJson}</span>
-            </button>
-          </div>
+      {(statusMessage || cloudError) && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-xs font-bold ${
+            cloudError
+              ? 'border-rose-500/40 bg-rose-500/15 text-rose-500'
+              : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-500'
+          }`}
+        >
+          {cloudError || statusMessage}
         </div>
+      )}
 
-        {statusMessage && (
-          <div
-            role="status"
-            className={`mt-4 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs sm:text-sm font-semibold ${
-              statusMessage.type === 'success'
-                ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-200'
-                : 'border-rose-500/35 bg-rose-500/15 text-rose-200'
-            }`}
-          >
-            {statusMessage.type === 'success' ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-            ) : (
-              <AlertCircle className="h-4 w-4 shrink-0" />
-            )}
-            <span>{statusMessage.text}</span>
-          </div>
-        )}
-      </section>
-
-      {/* Admin Tabs */}
-      <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-3 mb-5">
-        {(
-          [
-            { id: 'products', label: copy.tabProducts, icon: <Package className="h-4 w-4" /> },
-            { id: 'rates', label: copy.tabRates, icon: <TrendingUp className="h-4 w-4" /> },
-            { id: 'categories', label: copy.tabCategories, icon: <FolderKanban className="h-4 w-4" /> },
-            { id: 'banner', label: copy.tabBanner, icon: <Sparkles className="h-4 w-4" /> },
-            { id: 'branch', label: copy.tabBranch, icon: <MapPin className="h-4 w-4" /> },
-          ] as const
-        ).map((tab) => (
+      {/* Admin Sub-Navigation Tabs */}
+      <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
+        {[
+          {
+            id: 'orders' as AdminTab,
+            labelAr: `الطلبات الواردة (${newOrdersCount} جديد)`,
+            labelEn: `Incoming Orders (${newOrdersCount} new)`,
+            Icon: ClipboardList,
+          },
+          {
+            id: 'products' as AdminTab,
+            labelAr: `المنتجات (${storeData.products.length})`,
+            labelEn: `Products (${storeData.products.length})`,
+            Icon: Package,
+          },
+          {
+            id: 'identity' as AdminTab,
+            labelAr: 'الهوية والخلفيات والتصميم',
+            labelEn: 'Identity, Layout & Wallpapers',
+            Icon: LayoutGrid,
+          },
+          {
+            id: 'contacts' as AdminTab,
+            labelAr: 'الأرقام والروابط والأنظمة',
+            labelEn: 'Phones, Links & OS',
+            Icon: Globe,
+          },
+          {
+            id: 'branch' as AdminTab,
+            labelAr: 'الفرع والرمز السري',
+            labelEn: 'Branch & 10-Digit PIN',
+            Icon: KeyRound,
+          },
+        ].map(({ id, labelAr, labelEn, Icon }) => (
           <button
-            key={tab.id}
+            key={id}
             type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex min-h-[42px] items-center gap-2 rounded-xl border px-4 py-2 text-xs sm:text-sm font-bold whitespace-nowrap shrink-0 transition cursor-pointer ${
-              activeTab === tab.id
-                ? 'border-amber-400 bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] text-slate-950'
-                : 'border-amber-500/20 bg-[#131A26] text-slate-300 hover:border-amber-400/50 hover:text-white'
+            onClick={() => setActiveTab(id)}
+            data-testid={`admin-tab-${id}`}
+            className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold transition ${
+              activeTab === id ? 'tech-accent-btn shadow-sm' : 'tech-surface border'
             }`}
           >
-            {tab.icon}
-            <span>{tab.label}</span>
+            <Icon className="h-4 w-4" />
+            <span>{lang === 'ar' ? labelAr : labelEn}</span>
           </button>
         ))}
       </div>
 
-      {/* TAB 1: PRODUCTS CRUD */}
-      {activeTab === 'products' && (
-        <div className="space-y-5">
-          {/* Unlimited Daily Edits/Additions/Deletions Banner */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs sm:text-sm text-emerald-200">
-            <div className="flex items-center gap-2.5 font-semibold">
-              <InfinityIcon className="h-5 w-5 shrink-0 text-emerald-400" />
+      {/* TAB 1: ORDERS */}
+      {activeTab === 'orders' && (
+        <div className="space-y-4">
+          <div className="tech-surface flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4">
+            <div className="flex items-center gap-2.5 text-xs">
+              <ShieldAlert className="h-4 w-4 text-emerald-500 shrink-0" />
               <span>
                 {lang === 'ar'
-                  ? 'تحكم مفتوح بلا قيود يومية: يمكنك إضافة، تعديل، أو حذف أي عدد من المنتجات في أي وقت مع نشر فوري على Firebase للجميع.'
-                  : 'Unlimited Daily Operations: Add, edit, or delete any number of products anytime — synced instantaneously via Firebase Cloud for every visitor.'}
+                  ? 'رقم واتساب المتجر لاستقبال طلبات العملاء:'
+                  : 'Store WhatsApp Number Receiving Customer Orders:'}{' '}
+                <strong className="font-mono-tabular text-blue-500" dir="ltr">
+                  {storeData.branch.secretOrdersPhone ||
+                    storeData.branch.publicWhatsappNumber ||
+                    '201025134582'}
+                </strong>
               </span>
             </div>
-            <span className="rounded-lg border border-emerald-400/30 bg-emerald-500/20 px-2.5 py-1 text-xs font-bold text-emerald-100 font-mono-tabular">
-              {lang === 'ar'
-                ? `${storeData.products.length} منتج منشور`
-                : `${storeData.products.length} Live Products`}
-            </span>
+
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+              <span className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-emerald-500">
+                {whatsappStatus.mode === 'customer_whatsapp_client' ||
+                whatsappStatus.automatedChannelConfigured
+                  ? lang === 'ar'
+                    ? 'إرسال الطلبات عبر واتساب العميل مفعل'
+                    : 'Customer WhatsApp Order Checkout Active'
+                  : lang === 'ar'
+                    ? 'استقبال الطلبات عبر واتساب وحفظها سحابياً'
+                    : 'WhatsApp Checkout + Cloud Archive Ready'}
+              </span>
+              {aiStatus.configured && (
+                <span className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-emerald-500">
+                  Gemini AI ({aiStatus.model}) + Google Search
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            <form
-              onSubmit={handleSaveProduct}
-              className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 space-y-4 lg:col-span-5"
-            >
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-bold text-amber-300">
-                  {isEditingProduct
-                    ? lang === 'ar'
-                      ? 'تعديل المنتج'
-                      : 'Edit Product'
-                    : lang === 'ar'
-                      ? 'إضافة منتج جديد'
-                      : 'Add New Product'}
-                </h2>
-                {isEditingProduct && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProductForm(EMPTY_PRODUCT_FORM);
-                      setIsEditingProduct(false);
-                      setCompressedInfo(null);
-                    }}
-                    className="text-xs font-semibold text-amber-300 hover:underline cursor-pointer"
-                  >
-                    {lang === 'ar' ? '+ منتج جديد' : '+ New Product'}
-                  </button>
-                )}
-              </div>
-
-              {/* Compressed Image Upload or URL */}
-              <div className="space-y-2">
-                <label className="block text-xs font-semibold text-slate-300">
-                  {lang === 'ar'
-                    ? 'صورة المنتج (ضغط تلقائي < 120KB أو رابط مباشر)'
-                    : 'Product Image (Auto-compressed < 120KB or direct URL)'}
-                </label>
-                <div className="flex items-center gap-3">
-                  {productForm.imageUrl && (
-                    <img
-                      src={productForm.imageUrl}
-                      alt="Preview"
-                      className="h-16 w-16 rounded-xl object-cover border border-amber-500/30 shrink-0"
-                    />
-                  )}
-                  <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#0B0F17] px-4 py-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
-                    <ImagePlus className="h-4 w-4" />
-                    <span>
-                      {lang === 'ar' ? 'اختر صورة من الهاتف / الجهاز' : 'Upload Photo from Device'}
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleProductImageUpload}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-                <input
-                  type="url"
-                  placeholder={
-                    lang === 'ar'
-                      ? 'أو الصق رابط صورة مباشر (اختياري)...'
-                      : 'Or paste an image URL (optional)...'
-                  }
-                  value={productForm.imageUrl.startsWith('data:') ? '' : productForm.imageUrl}
-                  onChange={(e) => setProductForm({ ...productForm, imageUrl: e.target.value })}
-                  className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-slate-200 placeholder:text-slate-500"
-                />
-                {compressedInfo && (
-                  <p className="text-[11px] text-emerald-300">{compressedInfo}</p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="prod-name-ar" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'اسم المنتج (عربي)' : 'Product Name (AR)'}
-                  </label>
-                  <input
-                    id="prod-name-ar"
-                    type="text"
-                    value={productForm.nameAr}
-                    onChange={(e) => setProductForm({ ...productForm, nameAr: e.target.value })}
-                    placeholder={lang === 'ar' ? 'مثال: طقم شبكة عيار 21' : 'Arabic name (optional if EN set)'}
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="prod-name-en" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'اسم المنتج (إنجليزي)' : 'Product Name (EN)'}
-                  </label>
-                  <input
-                    id="prod-name-en"
-                    type="text"
-                    value={productForm.nameEn}
-                    onChange={(e) => setProductForm({ ...productForm, nameEn: e.target.value })}
-                    placeholder={lang === 'ar' ? 'اختياري عند كتابة العربي' : 'e.g. Royal 21K Gold Set'}
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="prod-category" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'القسم / الفئة' : 'Category'}
-                  </label>
-                  <select
-                    id="prod-category"
-                    value={productForm.categoryId}
-                    onChange={(e) => setProductForm({ ...productForm, categoryId: e.target.value })}
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                  >
-                    {storeData.categories
-                      .filter((c) => c.id !== 'all' && c.id !== 'offers')
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {lang === 'ar' ? c.nameAr : c.nameEn}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="prod-code" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'كود المنتج' : 'Product Code'}
-                  </label>
-                  <input
-                    id="prod-code"
-                    type="text"
-                    placeholder="AG-2105"
-                    value={productForm.code}
-                    onChange={(e) => setProductForm({ ...productForm, code: e.target.value })}
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2.5">
-                <div>
-                  <label htmlFor="prod-metal" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'المعدن' : 'Metal'}
-                  </label>
-                  <select
-                    id="prod-metal"
-                    value={productForm.metal}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, metal: e.target.value as MetalType })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
-                  >
-                    <option value="gold">{lang === 'ar' ? 'ذهب' : 'Gold'}</option>
-                    <option value="silver">{lang === 'ar' ? 'فضة' : 'Silver'}</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="prod-karat" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'العيار' : 'Karat'}
-                  </label>
-                  <select
-                    id="prod-karat"
-                    value={productForm.karat}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, karat: e.target.value as KaratType })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2.5 text-sm text-white"
-                  >
-                    <option value="24">24</option>
-                    <option value="21">21</option>
-                    <option value="18">18</option>
-                    <option value="925">925</option>
-                    <option value="999">999</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="prod-weight" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'الوزن (جم)' : 'Weight (g)'}
-                  </label>
-                  <input
-                    id="prod-weight"
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    value={productForm.weightGrams}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, weightGrams: Number(e.target.value) })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2.5">
-                <div>
-                  <label htmlFor="prod-pricing-mode" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'نظام السعر' : 'Pricing Mode'}
-                  </label>
-                  <select
-                    id="prod-pricing-mode"
-                    value={productForm.pricingMode}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, pricingMode: e.target.value as PricingMode })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-2 text-xs text-white"
-                  >
-                    <option value="auto">{lang === 'ar' ? 'تلقائي بالجرام' : 'Auto / Gram'}</option>
-                    <option value="manual">{lang === 'ar' ? 'سعر يدوي' : 'Manual Price'}</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="prod-price-input" className="block text-xs text-slate-300 mb-1">
-                    {productForm.pricingMode === 'auto'
-                      ? lang === 'ar'
-                        ? 'المصنعية/جم'
-                        : 'Making / g'
-                      : lang === 'ar'
-                        ? 'السعر اليدوي'
-                        : 'Manual Price'}
-                  </label>
-                  {productForm.pricingMode === 'auto' ? (
-                    <input
-                      id="prod-price-input"
-                      type="number"
-                      min="0"
-                      value={productForm.makingChargePerGram}
-                      onChange={(e) =>
-                        setProductForm({
-                          ...productForm,
-                          makingChargePerGram: Number(e.target.value),
-                        })
-                      }
-                      className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                    />
-                  ) : (
-                    <input
-                      id="prod-price-input"
-                      type="number"
-                      min="0"
-                      value={productForm.manualPrice}
-                      onChange={(e) =>
-                        setProductForm({ ...productForm, manualPrice: Number(e.target.value) })
-                      }
-                      className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                    />
-                  )}
-                </div>
-                <div>
-                  <label htmlFor="prod-discount" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'نسبة الخصم %' : 'Discount %'}
-                  </label>
-                  <input
-                    id="prod-discount"
-                    type="number"
-                    min="0"
-                    max="90"
-                    value={productForm.discountPercent}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, discountPercent: Number(e.target.value) })
-                    }
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white font-mono-tabular"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="prod-desc-ar" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'وصف المنتج (اختياري)' : 'Description AR (optional)'}
-                  </label>
-                  <input
-                    id="prod-desc-ar"
-                    type="text"
-                    value={productForm.descriptionAr}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, descriptionAr: e.target.value })
-                    }
-                    className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="prod-desc-en" className="block text-xs text-slate-300 mb-1">
-                    {lang === 'ar' ? 'الوصف بالإنجليزية (اختياري)' : 'Description EN (optional)'}
-                  </label>
-                  <input
-                    id="prod-desc-en"
-                    type="text"
-                    value={productForm.descriptionEn}
-                    onChange={(e) =>
-                      setProductForm({ ...productForm, descriptionEn: e.target.value })
-                    }
-                    className="h-9 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] px-3 text-xs text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 disabled:opacity-60 cursor-pointer"
+          {storeData.orders.length === 0 ? (
+            <div className="tech-surface rounded-2xl border p-10 text-center text-sm tech-text-secondary">
+              {lang === 'ar'
+                ? 'لا توجد طلبات عملاء واردة حتى الآن.'
+                : 'No customer orders submitted yet.'}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {storeData.orders.map((order) => (
+                <div
+                  key={order.id}
+                  data-testid={`admin-order-${order.id}`}
+                  className="tech-surface rounded-2xl border p-4 shadow-sm space-y-3"
                 >
-                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  <span>
-                    {isEditingProduct
-                      ? lang === 'ar'
-                        ? 'حفظ التعديلات ونشرها فوراً'
-                        : 'Save Changes & Publish Live'
-                      : copy.saveAndPublish}
-                  </span>
-                </button>
-                {isEditingProduct && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProductForm(EMPTY_PRODUCT_FORM);
-                      setIsEditingProduct(false);
-                      setCompressedInfo(null);
-                    }}
-                    className="rounded-xl border border-white/15 px-4 text-xs font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer"
-                  >
-                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
-                  </button>
-                )}
-              </div>
-            </form>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono-tabular text-xs font-extrabold text-blue-500">
+                          {order.id}
+                        </span>
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                            order.status === 'new'
+                              ? 'bg-amber-500/20 text-amber-500'
+                              : order.status === 'contacted'
+                                ? 'bg-blue-500/20 text-blue-500'
+                                : 'bg-emerald-500/20 text-emerald-500'
+                          }`}
+                        >
+                          {order.status === 'new'
+                            ? lang === 'ar'
+                              ? 'جديد'
+                              : 'New'
+                            : order.status === 'contacted'
+                              ? lang === 'ar'
+                                ? 'تم التواصل'
+                                : 'Contacted'
+                              : lang === 'ar'
+                                ? 'تم التسليم'
+                                : 'Delivered'}
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-extrabold mt-1">{order.customerName}</h3>
+                      <p className="tech-text-secondary text-xs">
+                        {order.customerAddress} •{' '}
+                        <span className="font-mono-tabular" dir="ltr">
+                          {order.customerPhone}
+                        </span>
+                      </p>
+                      {order.note && (
+                        <p className="mt-1 text-xs text-amber-500">
+                          {lang === 'ar' ? 'ملحوظة:' : 'Note:'} {order.note}
+                        </p>
+                      )}
+                    </div>
 
-            {/* Products Inventory List with Search, Single/Bulk Delete & Restore */}
-            <div className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 lg:col-span-7 space-y-3.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-base font-bold text-white">
-                  {lang === 'ar'
-                    ? `المنتجات الحالية (${storeData.products.length})`
-                    : `Current Products (${storeData.products.length})`}
-                </h2>
+                    <div className="text-end">
+                      <p className="font-mono-tabular text-base font-extrabold text-blue-600 dark:text-sky-400">
+                        {order.total.toLocaleString('en-US')} {order.currency}
+                      </p>
+                      <p className="tech-text-secondary text-[11px]">
+                        {new Date(order.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {selectedProductIds.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={isSaving}
-                      onClick={handleBulkDeleteSelected}
-                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-xs font-bold text-rose-200 hover:bg-rose-500/30 disabled:opacity-50 cursor-pointer"
+                  <div className="tech-surface-muted rounded-xl border p-3 text-xs space-y-1">
+                    {order.items.map((item, i) => (
+                      <div key={i} className="flex items-center justify-between">
+                        <span>
+                          {lang === 'ar' ? item.nameAr : item.nameEn} × {item.quantity}
+                        </span>
+                        <span className="font-mono-tabular font-bold">
+                          {(item.unitPrice * item.quantity).toLocaleString('en-US')}{' '}
+                          {order.currency}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span
+                      data-testid={`order-dispatch-badge-${order.id}`}
+                      className={`rounded-lg px-2.5 py-1 font-bold ${
+                        order.whatsappDispatchStatus === 'opened_whatsapp_client' ||
+                        order.whatsappDispatchStatus === 'sent_via_cloud_api' ||
+                        order.whatsappDispatchStatus === 'sent_via_gateway'
+                          ? 'bg-emerald-500/15 text-emerald-500'
+                          : order.whatsappDispatchStatus === 'sent_via_webhook'
+                            ? 'bg-blue-500/15 text-blue-500'
+                            : 'bg-slate-500/15 tech-text-secondary'
+                      }`}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span>
-                        {lang === 'ar'
-                          ? `حذف المحدد (${selectedProductIds.length})`
-                          : `Delete Selected (${selectedProductIds.length})`}
-                      </span>
-                    </button>
+                      {order.whatsappDispatchStatus === 'opened_whatsapp_client'
+                        ? lang === 'ar'
+                          ? 'تم فتح واتساب العميل للإرسال المباشر'
+                          : 'Opened in Customer WhatsApp'
+                        : order.whatsappDispatchStatus === 'sent_via_cloud_api'
+                          ? lang === 'ar'
+                            ? 'تم الإرسال تلقائياً عبر WhatsApp API'
+                            : 'Auto-Sent via WhatsApp Cloud API'
+                          : order.whatsappDispatchStatus === 'sent_via_gateway'
+                            ? lang === 'ar'
+                              ? 'تم الإرسال تلقائياً عبر البوابة'
+                              : 'Auto-Sent via WhatsApp Gateway'
+                            : order.whatsappDispatchStatus === 'sent_via_webhook'
+                              ? lang === 'ar'
+                                ? 'تم الإرسال تلقائياً عبر Webhook'
+                                : 'Auto-Sent via Webhook'
+                              : lang === 'ar'
+                                ? 'مجهز للإرسال ومؤرشف باللوحة'
+                                : 'Formatted & Archived in Panel'}
+                    </span>
+                  </div>
+
+                  {order.whatsappMessageText && (
+                    <pre
+                      data-testid={`order-whatsapp-preview-${order.id}`}
+                      className="tech-surface-muted whitespace-pre-wrap rounded-xl border p-3 text-[11px] leading-relaxed tech-text-secondary font-sans"
+                    >
+                      {order.whatsappMessageText}
+                    </pre>
                   )}
 
-                  {storeData.products.length > 0 && !confirmClearAll && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      {(['new', 'contacted', 'delivered'] as CustomerOrder['status'][]).map(
+                        (st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() => handleUpdateOrderStatus(order.id, st)}
+                            className={`rounded-lg px-2.5 py-1.5 text-xs font-bold border ${
+                              order.status === st
+                                ? 'tech-accent-btn border-transparent'
+                                : 'tech-surface-muted'
+                            }`}
+                          >
+                            {st === 'new'
+                              ? lang === 'ar'
+                                ? 'جديد'
+                                : 'New'
+                              : st === 'contacted'
+                                ? lang === 'ar'
+                                  ? 'تم التواصل'
+                                  : 'Contacted'
+                                : lang === 'ar'
+                                  ? 'تم التسليم'
+                                  : 'Delivered'}
+                          </button>
+                        )
+                      )}
+                    </div>
+
                     <button
                       type="button"
-                      disabled={isSaving}
-                      onClick={() => setConfirmClearAll(true)}
-                      className="flex items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-50 cursor-pointer"
+                      onClick={() => handleDeleteOrder(order.id)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/20"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      <span>{lang === 'ar' ? 'حذف الكل' : 'Delete All'}</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={handleRestoreDefaultProducts}
-                    className="flex items-center gap-1.5 rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 py-1.5 text-xs font-semibold text-amber-200 hover:border-amber-400 disabled:opacity-50 cursor-pointer"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    <span>{lang === 'ar' ? 'استعادة الافتراضي' : 'Restore Defaults'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {confirmClearAll && (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2.5 text-xs text-rose-100">
-                  <span className="font-semibold">
-                    {lang === 'ar'
-                      ? 'تأكيد حذف جميع المنتجات من المتجر والسحابة فوراً؟'
-                      : 'Confirm deleting all products from the store & Firebase Cloud immediately?'}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleDeleteAllProducts}
-                      className="rounded-lg bg-rose-600 px-3 py-1 font-bold text-white hover:bg-rose-500 cursor-pointer"
-                    >
-                      {lang === 'ar' ? 'نعم، احذف الكل' : 'Yes, Delete All'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmClearAll(false)}
-                      className="rounded-lg border border-white/20 px-3 py-1 font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer"
-                    >
-                      {lang === 'ar' ? 'تراجع' : 'Cancel'}
+                      <span>{lang === 'ar' ? 'حذف' : 'Delete'}</span>
                     </button>
                   </div>
                 </div>
-              )}
-
-              {/* Search inside Admin Products */}
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 start-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="search"
-                  value={adminProductSearch}
-                  onChange={(e) => setAdminProductSearch(e.target.value)}
-                  placeholder={
-                    lang === 'ar'
-                      ? 'ابحث داخل المنتجات بالاسم أو الكود أو العيار...'
-                      : 'Search admin products by name, code, or karat...'
-                  }
-                  aria-label={lang === 'ar' ? 'بحث في منتجات الأدمن' : 'Search admin products'}
-                  className="h-10 w-full rounded-xl border border-amber-500/20 bg-[#0B0F17] ps-9 pe-3 text-xs sm:text-sm text-white placeholder:text-slate-500"
-                />
-              </div>
-
-              {filteredAdminProducts.length === 0 ? (
-                <div className="rounded-xl border border-amber-500/15 bg-[#0B0F17] py-10 px-4 text-center text-xs sm:text-sm text-slate-400">
-                  {storeData.products.length === 0
-                    ? lang === 'ar'
-                      ? 'لا توجد منتجات حالياً. أضف أي منتج جديد من النموذج الجانبي ليظهر فوراً لجميع المستخدمين.'
-                      : 'No products currently in catalog. Add any new product using the form to publish live to all users.'
-                    : lang === 'ar'
-                      ? 'لا توجد منتجات مطابقة لعبارة البحث.'
-                      : 'No products match your search query.'}
-                </div>
-              ) : (
-                <div className="space-y-2.5 max-h-[600px] overflow-y-auto pe-1">
-                  {filteredAdminProducts.map((prod) => {
-                    const price = calculateProductPrice(
-                      prod,
-                      storeData.rates,
-                      storeData.rates.autoLinkPrices
-                    );
-                    const displayTitle = lang === 'ar' ? prod.nameAr : prod.nameEn;
-                    const isChecked = selectedProductIds.includes(prod.id);
-                    const isDeletingThis = deletingProductId === prod.id;
-
-                    return (
-                      <div
-                        key={prod.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/15 bg-[#0B0F17] p-3"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedProductIds((prev) => [...prev, prod.id]);
-                              } else {
-                                setSelectedProductIds((prev) =>
-                                  prev.filter((item) => item !== prod.id)
-                                );
-                              }
-                            }}
-                            aria-label={
-                              lang === 'ar'
-                                ? `تحديد ${displayTitle}`
-                                : `Select ${displayTitle}`
-                            }
-                            className="h-4 w-4 shrink-0 accent-amber-500 cursor-pointer"
-                          />
-                          <img
-                            src={prod.imageUrl}
-                            alt={displayTitle}
-                            className="h-14 w-14 rounded-lg object-cover shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <div className="text-sm font-bold text-white truncate">
-                              {displayTitle}
-                            </div>
-                            <div className="text-xs text-slate-400 font-mono-tabular">
-                              {prod.code} · {lang === 'ar' ? `عيار ${prod.karat}` : `${prod.karat}K`} ·{' '}
-                              {prod.weightGrams} {copy.gram} ·{' '}
-                              <span className="text-amber-300 font-bold">
-                                {formatCurrency(price.finalPrice, lang)}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            disabled={isSaving || storeData.products.findIndex((p) => p.id === prod.id) <= 0}
-                            onClick={() => handleMoveProduct(prod.id, 'up')}
-                            aria-label={
-                              lang === 'ar'
-                                ? `تحريك ${displayTitle} لأعلى`
-                                : `Move ${displayTitle} up`
-                            }
-                            className="flex h-9 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowUp className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={
-                              isSaving ||
-                              storeData.products.findIndex((p) => p.id === prod.id) >=
-                                storeData.products.length - 1
-                            }
-                            onClick={() => handleMoveProduct(prod.id, 'down')}
-                            aria-label={
-                              lang === 'ar'
-                                ? `تحريك ${displayTitle} لأسفل`
-                                : `Move ${displayTitle} down`
-                            }
-                            className="flex h-9 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowDown className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setProductForm({
-                                ...prod,
-                                descriptionAr: prod.descriptionAr || '',
-                                descriptionEn: prod.descriptionEn || '',
-                              });
-                              setIsEditingProduct(true);
-                            }}
-                            aria-label={
-                              lang === 'ar'
-                                ? `تعديل ${displayTitle}`
-                                : `Edit ${displayTitle}`
-                            }
-                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-500/25 text-amber-300 hover:bg-amber-500/15 cursor-pointer"
-                          >
-                            <Edit3 className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isDeletingThis}
-                            onClick={() => handleDeleteProduct(prod.id)}
-                            aria-label={
-                              lang === 'ar'
-                                ? `حذف ${displayTitle}`
-                                : `Delete ${displayTitle}`
-                            }
-                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-500/25 text-rose-400 hover:bg-rose-500/15 disabled:opacity-50 cursor-pointer"
-                          >
-                            {isDeletingThis ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              ))}
             </div>
-          </div>
+          )}
         </div>
       )}
 
-      {/* TAB 2: MARKET RATES */}
-      {activeTab === 'rates' && (
-        <form
-          onSubmit={handleSaveRates}
-          className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 sm:p-6 space-y-5"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base sm:text-lg font-bold text-amber-300">
-              أسعار الذهب والفضة والبورصة العالمية
-            </h2>
-            <button
-              type="button"
-              onClick={handleSpotRefreshInAdmin}
-              disabled={isRefreshingMarket}
-              className="flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-500/15 px-4 py-2 text-xs sm:text-sm font-bold text-amber-200 hover:bg-amber-500/25 cursor-pointer"
-            >
-              <RefreshCw className={`h-4 w-4 ${isRefreshingMarket ? 'animate-spin' : ''}`} />
-              <span>{copy.refreshMarketBtn}</span>
-            </button>
-          </div>
+      {/* TAB 2: PRODUCTS CRUD + VIDEO UPLOAD + PERMANENT DELETE + RESTORE */}
+      {activeTab === 'products' && (
+        <div className="space-y-6">
+          <form
+            onSubmit={handleSaveProduct}
+            className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-base font-extrabold">
+                {editingProductId
+                  ? lang === 'ar'
+                    ? 'تعديل بيانات المنتج'
+                    : 'Edit Product'
+                  : lang === 'ar'
+                    ? 'إضافة منتج جديد (كمبيوتر / لابتوب / إكسسوار / برنامج)'
+                    : 'Add New Product'}
+              </h3>
+              {editingProductId && (
+                <button
+                  type="button"
+                  onClick={resetProductForm}
+                  className="text-xs font-bold text-blue-500 hover:underline"
+                >
+                  {lang === 'ar' ? 'إلغاء التعديل' : 'Cancel Edit'}
+                </button>
+              )}
+            </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            {(
-              [
-                ['gold24', 'ذهب عيار 24 (ج.م)'],
-                ['gold21', 'ذهب عيار 21 (ج.م)'],
-                ['gold18', 'ذهب عيار 18 (ج.م)'],
-                ['goldPound', 'الجنيه الذهب (ج.م)'],
-                ['silver925', 'فضة إيطالي 925 (ج.م)'],
-                ['silverSwiss', 'فضة سويسري (ج.م)'],
-                ['diamondCaratUsd', 'مؤشر الألماس/قيراط ($)'],
-                ['ounceUsd', 'الأونصة العالمية ($)'],
-                ['silverOunceUsd', 'أونصة الفضة ($)'],
-                ['usdEgp', 'دولار الصاغة (ج.م)'],
-              ] as const
-            ).map(([field, label]) => (
-              <div key={field}>
-                <label className="block text-xs text-slate-300 mb-1.5">{label}</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم المنتج (عربي) *' : 'Product Name (AR) *'}
+                </label>
                 <input
-                  type="number"
-                  step="0.01"
-                  value={ratesForm[field]}
-                  onChange={(e) =>
-                    setRatesForm({ ...ratesForm, [field]: Number(e.target.value) })
-                  }
-                  className="font-mono-tabular h-11 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm font-bold text-white"
+                  type="text"
+                  required
+                  value={pNameAr}
+                  onChange={(e) => setPNameAr(e.target.value)}
+                  data-testid="admin-prod-name-ar"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 />
               </div>
-            ))}
-          </div>
 
-          <label className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-[#0B0F17] p-4 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={ratesForm.autoLinkPrices}
-              onChange={(e) =>
-                setRatesForm({ ...ratesForm, autoLinkPrices: e.target.checked })
-              }
-              className="h-4 w-4 accent-amber-500"
-            />
-            <span className="text-sm font-semibold text-slate-200">
-              تفعيل الربط التلقائي لأسعار المنتجات بسعر الجرام اللحظي والمصنعية
-            </span>
-          </label>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم المنتج (إنجليزي)' : 'Product Name (EN)'}
+                </label>
+                <input
+                  type="text"
+                  value={pNameEn}
+                  onChange={(e) => setPNameEn(e.target.value)}
+                  data-testid="admin-prod-name-en"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
 
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="flex min-h-[46px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-6 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 cursor-pointer"
-          >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            <span>{copy.saveAndPublish}</span>
-          </button>
-        </form>
-      )}
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'الماركة / البراند' : 'Brand'}
+                </label>
+                <input
+                  type="text"
+                  value={pBrand}
+                  onChange={(e) => setPBrand(e.target.value)}
+                  placeholder="ASUS / Lenovo / HP / Logitech"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
 
-      {/* TAB 3: CATEGORIES */}
-      {activeTab === 'categories' && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <form
-            onSubmit={handleAddCategory}
-            className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 space-y-4 lg:col-span-5"
-          >
-            <h2 className="text-base font-bold text-amber-300">إضافة فئة / قسم جديد</h2>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">اسم القسم (عربي)</label>
-              <input
-                type="text"
-                required
-                value={newCatAr}
-                onChange={(e) => setNewCatAr(e.target.value)}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'التصنيف الرئيسي' : 'Main Category'}
+                </label>
+                <select
+                  value={pCategoryGroup}
+                  onChange={(e) => setPCategoryGroup(e.target.value as ProductCategoryGroup)}
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-bold outline-none"
+                >
+                  <option value="computers">{lang === 'ar' ? 'كمبيوترات' : 'Computers'}</option>
+                  <option value="accessories">{lang === 'ar' ? 'إكسسوارات' : 'Accessories'}</option>
+                  <option value="software">{lang === 'ar' ? 'برمجيات وأنظمة' : 'Software'}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'النوع الفرعي' : 'Device Subtype'}
+                </label>
+                <select
+                  value={pSubType}
+                  onChange={(e) => setPSubType(e.target.value as ProductSubType)}
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-bold outline-none"
+                >
+                  <option value="laptop">Laptop</option>
+                  <option value="desktop_case">PC Case / Desktop</option>
+                  <option value="custom_build">Custom Workstation Build</option>
+                  <option value="monitor">Monitor</option>
+                  <option value="headset">Headset</option>
+                  <option value="mic">Microphone</option>
+                  <option value="keyboard_mouse">Keyboard & Mouse</option>
+                  <option value="bag">Laptop Bag</option>
+                  <option value="software">Software / License</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'كود المنتج (SKU)' : 'SKU'}
+                </label>
+                <input
+                  type="text"
+                  value={pSku}
+                  onChange={(e) => setPSku(e.target.value)}
+                  placeholder="LAP-001"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? `السعر (${storeData.settings.currency}) *` : 'Price *'}
+                </label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  value={pPrice}
+                  onChange={(e) => setPPrice(e.target.value)}
+                  data-testid="admin-prod-price"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'نسبة الخصم (%)' : 'Discount (%)'}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={95}
+                  value={pDiscount}
+                  onChange={(e) => setPDiscount(e.target.value)}
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
+                />
+              </div>
+
+              <div className="flex items-end pb-1.5">
+                <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-bold">
+                  <input
+                    type="checkbox"
+                    checked={pInStock}
+                    onChange={(e) => setPInStock(e.target.checked)}
+                    className="h-4 w-4 rounded accent-blue-600"
+                  />
+                  <span>{lang === 'ar' ? 'متوفر بالمخزون' : 'In Stock'}</span>
+                </label>
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">Category Name (EN)</label>
-              <input
-                type="text"
-                required
-                value={newCatEn}
-                onChange={(e) => setNewCatEn(e.target.value)}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'المواصفات (عربي)' : 'Specs (AR)'}
+                </label>
+                <input
+                  type="text"
+                  value={pSpecsAr}
+                  onChange={(e) => setPSpecsAr(e.target.value)}
+                  placeholder="Core i7 • RTX 4060 • 16GB RAM • 1TB SSD"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'المواصفات (إنجليزي)' : 'Specs (EN)'}
+                </label>
+                <input
+                  type="text"
+                  value={pSpecsEn}
+                  onChange={(e) => setPSpecsEn(e.target.value)}
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">الأيقونة</label>
-              <select
-                value={newCatIcon}
-                onChange={(e) => setNewCatIcon(e.target.value)}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              >
-                <option value="crown">تاج (Crown)</option>
-                <option value="gem">جوهرة (Gem)</option>
-                <option value="watch">ساعة (Watch)</option>
-                <option value="heart">قلب (Heart)</option>
-                <option value="coins">سبائك (Coins)</option>
-                <option value="sparkles">تألق (Sparkles)</option>
-              </select>
+
+            {/* Image + Promo Video Upload */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-inherit pt-4">
+              <div className="space-y-2">
+                <label className="block text-xs font-bold">
+                  {lang === 'ar' ? 'صورة المنتج (رفع من الجهاز أو اختيار جاهز)' : 'Product Image'}
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="tech-surface-muted inline-flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold hover:border-blue-500/40">
+                    <Upload className="h-3.5 w-3.5 text-blue-500" />
+                    <span>{lang === 'ar' ? 'رفع صورة (<120KB)' : 'Upload Image'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleProductImageUpload(e.target.files?.[0])}
+                    />
+                  </label>
+                  <select
+                    value={pImageUrl}
+                    onChange={(e) => setPImageUrl(e.target.value)}
+                    className="tech-surface-muted rounded-xl border px-3 py-2 text-xs font-bold outline-none"
+                  >
+                    {IMAGE_PRESETS.map((preset) => (
+                      <option key={preset.url} value={preset.url}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <input
+                  type="text"
+                  value={pImageUrl}
+                  onChange={(e) => setPImageUrl(e.target.value)}
+                  placeholder="/src/assets/images/..."
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-1.5 text-xs font-bold">
+                  <Video className="h-3.5 w-3.5 text-blue-500" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'فيديو ترويجي للمنتج (رفع من الاستوديو أو رابط مباشر)'
+                      : 'Promo Video (Upload from Device or Direct URL)'}
+                  </span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="tech-surface-muted inline-flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold hover:border-blue-500/40">
+                    <Upload className="h-3.5 w-3.5 text-blue-500" />
+                    <span>
+                      {uploadingVideo
+                        ? lang === 'ar'
+                          ? 'جاري رفع الفيديو...'
+                          : 'Uploading...'
+                        : lang === 'ar'
+                          ? 'رفع فيديو MP4/WebM'
+                          : 'Upload Video'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="video/mp4,video/webm,video/quicktime"
+                      className="hidden"
+                      onChange={(e) => handleProductVideoUpload(e.target.files?.[0])}
+                    />
+                  </label>
+                  {pVideoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setPVideoUrl('')}
+                      className="text-xs font-bold text-rose-500 hover:underline"
+                    >
+                      {lang === 'ar' ? 'إزالة الفيديو' : 'Clear Video'}
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={pVideoUrl}
+                  onChange={(e) => setPVideoUrl(e.target.value)}
+                  placeholder="/uploads/promo_... or https://..."
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+                />
+              </div>
             </div>
+
             <button
               type="submit"
-              disabled={isSaving}
-              className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 cursor-pointer"
+              disabled={savingCloud || uploadingVideo}
+              data-testid="admin-save-product-btn"
+              className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-extrabold"
             >
               <Plus className="h-4 w-4" />
-              <span>إضافة ونشر الفئة</span>
+              <span>
+                {editingProductId
+                  ? lang === 'ar'
+                    ? 'حفظ التعديلات على المنتج'
+                    : 'Save Product Changes'
+                  : lang === 'ar'
+                    ? 'إضافة ونشر المنتج الآن'
+                    : 'Add & Publish Product'}
+              </span>
             </button>
           </form>
 
-          <div className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 space-y-3 lg:col-span-7">
-            <h2 className="text-base font-bold text-white">الأقسام الحالية</h2>
-            {storeData.categories.map((cat) => (
-              <div
-                key={cat.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/15 bg-[#0B0F17] p-3"
+          {/* Products List + Permanent Delete + Restore Defaults */}
+          <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-extrabold">
+                  {lang === 'ar' ? 'قائمة المنتجات الحالية' : 'Current Store Products'}
+                </h3>
+                <p className="tech-text-secondary text-xs">
+                  {lang === 'ar'
+                    ? `محذوفات مسجلة لخدمة العملاء الذكية: ${storeData.deletedProductsHistory.length}`
+                    : `Deleted items tracked for AI support: ${storeData.deletedProductsHistory.length}`}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRestoreDefaults}
+                data-testid="restore-defaults-btn"
+                className="tech-surface-muted inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-extrabold hover:border-blue-500/50"
               >
-                {editingCatId === cat.id ? (
-                  <div className="flex flex-1 flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      value={editingCatAr}
-                      onChange={(e) => setEditingCatAr(e.target.value)}
-                      className="h-9 flex-1 min-w-[120px] rounded-lg border border-amber-500/30 bg-[#131A26] px-2.5 text-xs text-white"
+                <RotateCcw className="h-3.5 w-3.5 text-blue-500" />
+                <span>
+                  {lang === 'ar' ? 'استعادة المنتجات الافتراضية' : 'Restore Default Products'}
+                </span>
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {storeData.products.map((prod, index) => (
+                <div
+                  key={prod.id}
+                  data-testid={`admin-prod-row-${prod.id}`}
+                  className="tech-surface-muted flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <img
+                      src={prod.imageUrl}
+                      alt={prod.nameAr}
+                      className="h-14 w-16 shrink-0 rounded-lg object-cover bg-slate-900"
                     />
-                    <input
-                      type="text"
-                      value={editingCatEn}
-                      onChange={(e) => setEditingCatEn(e.target.value)}
-                      className="h-9 flex-1 min-w-[120px] rounded-lg border border-amber-500/30 bg-[#131A26] px-2.5 text-xs text-white"
-                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-extrabold">
+                        {lang === 'ar' ? prod.nameAr : prod.nameEn}
+                      </p>
+                      <p className="tech-text-secondary text-xs font-mono-tabular">
+                        {prod.price.toLocaleString('en-US')} {storeData.settings.currency}
+                        {prod.discountPercent > 0 ? ` (-${prod.discountPercent}%)` : ''} •{' '}
+                        {prod.inStock
+                          ? lang === 'ar'
+                            ? 'متاح'
+                            : 'In Stock'
+                          : lang === 'ar'
+                            ? 'نفذ'
+                            : 'Out'}
+                        {prod.videoUrl ? ' • 🎬 Video' : ''}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() => handleSaveCategoryEdit(cat.id)}
-                      className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 cursor-pointer"
+                      onClick={() => handleMoveProduct(index, -1)}
+                      disabled={index === 0}
+                      aria-label="Move up"
+                      className="tech-surface rounded-lg border p-2 disabled:opacity-40"
                     >
-                      حفظ
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleMoveProduct(index, 1)}
+                      disabled={index === storeData.products.length - 1}
+                      aria-label="Move down"
+                      className="tech-surface rounded-lg border p-2 disabled:opacity-40"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEditingProduct(prod)}
+                      className="tech-surface inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-bold"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-blue-500" />
+                      <span>{lang === 'ar' ? 'تعديل' : 'Edit'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePermanentDeleteProduct(prod.id)}
+                      data-testid={`admin-delete-prod-${prod.id}`}
+                      className="inline-flex items-center gap-1 rounded-lg bg-rose-500/15 px-2.5 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/25"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{lang === 'ar' ? 'حذف نهائي' : 'Delete'}</span>
                     </button>
                   </div>
-                ) : (
-                  <>
-                    <div>
-                      <span className="text-sm font-bold text-white">{cat.nameAr}</span>
-                      <span className="mx-2 text-slate-500">·</span>
-                      <span className="text-xs text-slate-400">{cat.nameEn}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        disabled={isSaving || storeData.categories.findIndex((c) => c.id === cat.id) <= 0}
-                        onClick={() => handleMoveCategory(cat.id, 'up')}
-                        aria-label={lang === 'ar' ? `تحريك ${cat.nameAr} لأعلى` : `Move ${cat.nameEn} up`}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
-                      >
-                        <ArrowUp className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={
-                          isSaving ||
-                          storeData.categories.findIndex((c) => c.id === cat.id) >=
-                            storeData.categories.length - 1
-                        }
-                        onClick={() => handleMoveCategory(cat.id, 'down')}
-                        aria-label={lang === 'ar' ? `تحريك ${cat.nameAr} لأسفل` : `Move ${cat.nameEn} down`}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-30 cursor-pointer"
-                      >
-                        <ArrowDown className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingCatId(cat.id);
-                          setEditingCatAr(cat.nameAr);
-                          setEditingCatEn(cat.nameEn);
-                        }}
-                        aria-label={`تعديل ${cat.nameAr}`}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg border border-amber-500/25 text-amber-300 hover:bg-amber-500/15 cursor-pointer"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                      </button>
-                      {!cat.isSystem && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCategory(cat.id)}
-                          aria-label={`حذف ${cat.nameAr}`}
-                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/25 text-rose-400 hover:bg-rose-500/15 cursor-pointer"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* TAB 4: BANNER & OFFERS */}
-      {activeTab === 'banner' && (
-        <form
-          onSubmit={handleSaveBanner}
-          className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 sm:p-6 space-y-4"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base sm:text-lg font-bold text-amber-300">
-              إدارة البنر الترويجي والعروض الموسمية
-            </h2>
-            <label className="flex items-center gap-2 text-sm font-semibold text-white cursor-pointer">
-              <input
-                type="checkbox"
-                checked={bannerForm.enabled}
-                onChange={(e) => setBannerForm({ ...bannerForm, enabled: e.target.checked })}
-                className="h-4 w-4 accent-amber-500"
-              />
-              <span>تفعيل البنر في الواجهة الرئيسية</span>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">العنوان الرئيسي (عربي)</label>
-              <input
-                type="text"
-                value={bannerForm.titleAr}
-                onChange={(e) => setBannerForm({ ...bannerForm, titleAr: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">Headline (EN)</label>
-              <input
-                type="text"
-                value={bannerForm.titleEn}
-                onChange={(e) => setBannerForm({ ...bannerForm, titleEn: e.target.value })}
-                className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">الوصف (عربي)</label>
-              <textarea
-                rows={2}
-                value={bannerForm.subtitleAr}
-                onChange={(e) => setBannerForm({ ...bannerForm, subtitleAr: e.target.value })}
-                className="w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] p-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">Subtitle (EN)</label>
-              <textarea
-                rows={2}
-                value={bannerForm.subtitleEn}
-                onChange={(e) => setBannerForm({ ...bannerForm, subtitleEn: e.target.value })}
-                className="w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] p-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">نسبة الخصم %</label>
-              <input
-                type="number"
-                min="0"
-                max="90"
-                value={bannerForm.discountPercent}
-                onChange={(e) =>
-                  setBannerForm({ ...bannerForm, discountPercent: Number(e.target.value) })
-                }
-                className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300 mb-1">صورة البنر (ضغط &lt; 120KB)</label>
-              <label className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#0B0F17] px-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
-                <ImagePlus className="h-4 w-4" />
-                <span>رفع صورة بنر جديدة</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleBannerImageUpload}
-                  className="hidden"
-                />
-              </label>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="flex min-h-[46px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-6 py-2.5 text-sm font-bold text-slate-950 cursor-pointer"
-          >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            <span>{copy.saveAndPublish}</span>
-          </button>
-        </form>
-      )}
-
-      {/* TAB 5: SITE IDENTITY (NAME, LINK, ICON) & BRANCH */}
-      {activeTab === 'branch' && (
-        <form
-          onSubmit={handleSaveBranch}
-          className="rounded-2xl border border-amber-500/20 bg-[#131A26] p-5 sm:p-6 space-y-6"
-        >
-          {/* Section 1: Website Name, Link & Icon */}
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base sm:text-lg font-bold text-amber-300 flex items-center gap-2">
-                  <Globe className="h-5 w-5 text-amber-400" />
-                  <span>
-                    {lang === 'ar'
-                      ? 'هوية الموقع (الاسم والرابط والأيقونة)'
-                      : 'Website Identity (Name, Link & Icon)'}
-                  </span>
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {lang === 'ar'
-                    ? 'أي تعديل هنا يتحدّث فوراً في الهيدر وعنوان المتصفح وأيقونة التبويب والرابط للجميع حول العالم.'
-                    : 'Changes saved here update the header, browser tab title, favicon icon, and official link worldwide in real time.'}
-                </p>
-              </div>
-
-              {/* Live Brand Identity Preview */}
-              <div className="flex items-center gap-3 rounded-xl border border-amber-500/30 bg-[#0B0F17] px-3.5 py-2">
-                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-amber-400/40 bg-amber-500/15 text-amber-400 shrink-0">
-                  {branchForm.websiteIconUrl && !iconPreviewFailed ? (
-                    <img
-                      src={branchForm.websiteIconUrl}
-                      alt="Site Icon Preview"
-                      onError={() => setIconPreviewFailed(true)}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : branchForm.websitePresetIcon === 'gem' ? (
-                    <Gem className="h-5 w-5" />
-                  ) : branchForm.websitePresetIcon === 'sparkles' ? (
-                    <Sparkles className="h-5 w-5" />
-                  ) : branchForm.websitePresetIcon === 'star' ? (
-                    <Star className="h-5 w-5" />
-                  ) : (
-                    <Crown className="h-5 w-5" />
-                  )}
-                </span>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold text-amber-200 truncate max-w-[180px]">
-                    {(lang === 'ar' ? branchForm.storeNameAr : branchForm.storeNameEn) ||
-                      (lang === 'ar' ? 'أشرف جولد' : 'Ashraf Gold')}
-                  </div>
-                  <div className="text-[11px] text-slate-400 truncate max-w-[190px]" dir="ltr">
-                    {normalizeWebsiteUrl(branchForm.websiteUrl || '') ||
-                      branchForm.websiteUrl ||
-                      DEFAULT_WEBSITE_URL}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="site-name-ar" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'اسم الموقع (عربي)' : 'Website Name (Arabic)'}
-                </label>
-                <input
-                  id="site-name-ar"
-                  type="text"
-                  value={branchForm.storeNameAr}
-                  onChange={(e) => setBranchForm({ ...branchForm, storeNameAr: e.target.value })}
-                  placeholder="أشرف جولد"
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white focus:border-amber-400 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="site-name-en" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'اسم الموقع (إنجليزي)' : 'Website Name (English)'}
-                </label>
-                <input
-                  id="site-name-en"
-                  type="text"
-                  value={branchForm.storeNameEn}
-                  onChange={(e) => setBranchForm({ ...branchForm, storeNameEn: e.target.value })}
-                  placeholder="Ashraf Gold"
-                  dir="ltr"
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white focus:border-amber-400 focus:outline-none"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label htmlFor="site-url" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar'
-                    ? 'رابط الموقع الرسمي (Website Link / URL)'
-                    : 'Website Link / URL'}
-                </label>
-                <div className="relative">
-                  <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-amber-400/70" />
-                  <input
-                    id="site-url"
-                    type="text"
-                    value={branchForm.websiteUrl || ''}
-                    onChange={(e) => setBranchForm({ ...branchForm, websiteUrl: e.target.value })}
-                    placeholder="https://ashraf-gold.web.app"
-                    dir="ltr"
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] pl-9 pr-3 text-sm text-white font-mono-tabular focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Website Icon Controls */}
-            <div className="rounded-xl border border-amber-500/20 bg-[#0B0F17]/70 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-bold text-amber-300">
-                  {lang === 'ar'
-                    ? 'أيقونة الموقع والشعار (Website Icon / Favicon)'
-                    : 'Website Icon & Favicon'}
-                </span>
-                {branchForm.websiteIconUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setBranchForm({ ...branchForm, websiteIconUrl: '' })}
-                    className="text-xs font-semibold text-rose-300 hover:text-rose-200 cursor-pointer"
-                  >
-                    {lang === 'ar' ? 'إزالة الصورة والعودة للأيقونة المختارة' : 'Clear custom image'}
-                  </button>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <span className="block text-[11px] text-slate-400 mb-1">
-                    {lang === 'ar'
-                      ? 'رفع صورة أيقونة من الجهاز (تُضغط تلقائياً < 120KB)'
-                      : 'Upload Custom Icon Image (Auto-compressed < 120KB)'}
-                  </span>
-                  <label className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-amber-500/40 bg-[#131A26] px-3 text-xs font-semibold text-amber-300 hover:bg-amber-500/10">
-                    <ImagePlus className="h-4 w-4" />
-                    <span>
-                      {lang === 'ar' ? 'اختيار صورة أيقونة / شعار' : 'Choose Icon Image File'}
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleWebsiteIconUpload}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-
-                <div>
-                  <label htmlFor="site-icon-url" className="block text-[11px] text-slate-400 mb-1">
-                    {lang === 'ar'
-                      ? 'أو الصق رابط صورة الأيقونة (URL أو /icon.svg)'
-                      : 'Or Paste Icon Image URL (https://... or /icon.svg)'}
-                  </label>
-                  <input
-                    id="site-icon-url"
-                    type="text"
-                    value={branchForm.websiteIconUrl || ''}
-                    onChange={(e) =>
-                      setBranchForm({ ...branchForm, websiteIconUrl: e.target.value })
-                    }
-                    placeholder="https://example.com/logo.png"
-                    dir="ltr"
-                    className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#131A26] px-3 text-xs sm:text-sm text-white focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="text-[11px] text-slate-400 mb-2">
-                  {lang === 'ar'
-                    ? 'أو اختر أيقونة ملكية جاهزة (تُحدّث الهيدر وأيقونة المتصفح):'
-                    : 'Or pick a luxury preset icon (updates both header & browser tab favicon):'}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {(
-                    [
-                      { id: 'crown', labelAr: 'تاج ملكي', labelEn: 'Crown', Icon: Crown },
-                      { id: 'gem', labelAr: 'ألماسة', labelEn: 'Diamond', Icon: Gem },
-                      { id: 'sparkles', labelAr: 'بريق ذهب', labelEn: 'Sparkles', Icon: Sparkles },
-                      { id: 'star', labelAr: 'نجمة', labelEn: 'Star', Icon: Star },
-                    ] as const
-                  ).map(({ id, labelAr, labelEn, Icon }) => {
-                    const isSelected =
-                      !branchForm.websiteIconUrl &&
-                      (branchForm.websitePresetIcon || 'crown') === id;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() =>
-                          setBranchForm({
-                            ...branchForm,
-                            websitePresetIcon: id as WebsitePresetIcon,
-                            websiteIconUrl: '',
-                          })
-                        }
-                        className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition cursor-pointer ${
-                          isSelected
-                            ? 'border-amber-400 bg-amber-500/20 text-amber-200'
-                            : 'border-slate-700 bg-[#131A26] text-slate-300 hover:border-amber-500/40 hover:text-white'
-                        }`}
-                      >
-                        <Icon className="h-4 w-4 text-amber-400" />
-                        <span>{lang === 'ar' ? labelAr : labelEn}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <hr className="border-amber-500/15" />
-
-          {/* Section 2: Branch & Contact Info */}
-          <div className="space-y-4">
-            <h3 className="text-sm sm:text-base font-bold text-amber-300">
+      {/* TAB 3: IDENTITY, LAYOUT & WALLPAPERS */}
+      {activeTab === 'identity' && (
+        <div className="space-y-6">
+          <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
+            <h3 className="text-base font-extrabold">
               {lang === 'ar'
-                ? 'معلومات الفرع وأرقام التواصل وإعدادات اللغة'
-                : 'Branch Address, Contact & Default Language'}
+                ? 'هوية المتجر، الأيقونة، ونمط التصميم'
+                : 'Store Identity, Icon & UI Layout'}
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label htmlFor="branch-address-ar" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'عنوان الفرع (عربي)' : 'Branch Address (AR)'}
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم المتجر (عربي)' : 'Store Name (AR)'}
                 </label>
                 <input
-                  id="branch-address-ar"
                   type="text"
-                  value={branchForm.addressAr}
-                  onChange={(e) => setBranchForm({ ...branchForm, addressAr: e.target.value })}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label htmlFor="branch-address-en" className="block text-xs text-slate-300 mb-1">
-                  Branch Address (EN)
-                </label>
-                <input
-                  id="branch-address-en"
-                  type="text"
-                  value={branchForm.addressEn}
-                  onChange={(e) => setBranchForm({ ...branchForm, addressEn: e.target.value })}
-                  dir="ltr"
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label htmlFor="branch-hours-ar" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'مواعيد العمل (عربي)' : 'Working Hours (AR)'}
-                </label>
-                <input
-                  id="branch-hours-ar"
-                  type="text"
-                  value={branchForm.workingHoursAr}
+                  value={identityDraft.storeNameAr}
                   onChange={(e) =>
-                    setBranchForm({ ...branchForm, workingHoursAr: e.target.value })
+                    setIdentityDraft((prev) => ({ ...prev, storeNameAr: e.target.value }))
                   }
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
                 />
               </div>
+
               <div>
-                <label htmlFor="branch-hours-en" className="block text-xs text-slate-300 mb-1">
-                  Working Hours (EN)
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم المتجر (إنجليزي)' : 'Store Name (EN)'}
                 </label>
                 <input
-                  id="branch-hours-en"
                   type="text"
-                  value={branchForm.workingHoursEn}
+                  value={identityDraft.storeNameEn}
                   onChange={(e) =>
-                    setBranchForm({ ...branchForm, workingHoursEn: e.target.value })
+                    setIdentityDraft((prev) => ({ ...prev, storeNameEn: e.target.value }))
                   }
-                  dir="ltr"
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
                 />
               </div>
+
               <div>
-                <label htmlFor="branch-whatsapp" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'رقم الواتساب (بدون +)' : 'WhatsApp Number (digits only)'}
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'رابط الموقع' : 'Website URL'}
                 </label>
                 <input
-                  id="branch-whatsapp"
-                  type="text"
-                  value={branchForm.whatsappNumber}
+                  type="url"
+                  dir="ltr"
+                  value={identityDraft.siteUrl}
                   onChange={(e) =>
-                    setBranchForm({ ...branchForm, whatsappNumber: e.target.value })
+                    setIdentityDraft((prev) => ({ ...prev, siteUrl: e.target.value }))
                   }
-                  dir="ltr"
-                  className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
                 />
               </div>
+
               <div>
-                <label htmlFor="branch-phone" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar' ? 'رقم الاتصال الهاتفي' : 'Phone Number'}
-                </label>
-                <input
-                  id="branch-phone"
-                  type="text"
-                  value={branchForm.phoneNumber}
-                  onChange={(e) => setBranchForm({ ...branchForm, phoneNumber: e.target.value })}
-                  dir="ltr"
-                  className="font-mono-tabular h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
-                />
-              </div>
-              <div>
-                <label htmlFor="default-lang" className="block text-xs text-slate-300 mb-1">
-                  {lang === 'ar'
-                    ? 'لغة المتجر الافتراضية للزوار (Language Settings)'
-                    : 'Default Visitor Language'}
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'نمط عرض واجهة المتجر' : 'Storefront Layout Style'}
                 </label>
                 <select
-                  id="default-lang"
-                  value={defaultLangForm}
-                  onChange={(e) => setDefaultLangForm(e.target.value as Language)}
-                  className="h-10 w-full rounded-xl border border-amber-500/25 bg-[#0B0F17] px-3 text-sm text-white"
+                  value={identityDraft.layoutStyle}
+                  onChange={(e) =>
+                    setIdentityDraft((prev) => ({
+                      ...prev,
+                      layoutStyle: e.target.value as LayoutStyle,
+                    }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-bold outline-none"
                 >
-                  <option value="ar">العربية (RTL)</option>
-                  <option value="en">English (LTR)</option>
+                  <option value="modern_grid">
+                    {lang === 'ar' ? 'شبكة أمازون التقنية الحديثة' : 'Modern Tech Grid'}
+                  </option>
+                  <option value="executive_wide">
+                    {lang === 'ar' ? 'بطاقات عريضة تفصيلية' : 'Executive Wide Cards'}
+                  </option>
+                  <option value="compact_cards">
+                    {lang === 'ar' ? 'شبكة مضغوطة سريعة (4 أعمدة)' : 'Compact 4-Column Grid'}
+                  </option>
                 </select>
               </div>
             </div>
+
+            <div className="flex flex-wrap items-center gap-4 border-t border-inherit pt-4">
+              <img
+                src={identityDraft.storeIconUrl || DEFAULT_STORE_ICON_URL}
+                alt="Store Icon"
+                className="h-14 w-14 rounded-2xl border border-blue-500/30 object-cover"
+              />
+              <div className="flex-1 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="tech-surface-muted inline-flex cursor-pointer items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold">
+                    <Upload className="h-3.5 w-3.5 text-blue-500" />
+                    <span>{lang === 'ar' ? 'رفع أيقونة جديدة' : 'Upload New Icon'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleUploadStoreIcon(e.target.files?.[0])}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIdentityDraft((prev) => ({
+                        ...prev,
+                        storeIconUrl: DEFAULT_STORE_ICON_URL,
+                      }))
+                    }
+                    className="text-xs font-bold text-blue-500 hover:underline"
+                  >
+                    {lang === 'ar' ? 'استعادة أيقونة 512×512 PNG الافتراضية' : 'Restore 512px PNG Icon'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={identityDraft.storeIconUrl}
+                  onChange={(e) =>
+                    setIdentityDraft((prev) => ({ ...prev, storeIconUrl: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-1.5 text-xs font-mono-tabular outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-inherit pt-4">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'عنوان البانر الرئيسي (عربي)' : 'Hero Banner Title (AR)'}
+                </label>
+                <input
+                  type="text"
+                  value={identityDraft.heroTitleAr}
+                  onChange={(e) =>
+                    setIdentityDraft((prev) => ({ ...prev, heroTitleAr: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'عنوان البانر الرئيسي (إنجليزي)' : 'Hero Banner Title (EN)'}
+                </label>
+                <input
+                  type="text"
+                  value={identityDraft.heroTitleEn}
+                  onChange={(e) =>
+                    setIdentityDraft((prev) => ({ ...prev, heroTitleEn: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                onSaveStoreData(
+                  { ...storeData, settings: identityDraft },
+                  lang === 'ar' ? 'تم حفظ إعدادات الهوية والتصميم.' : 'Identity & layout saved.'
+                )
+              }
+              className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-extrabold"
+            >
+              <Save className="h-4 w-4" />
+              <span>{lang === 'ar' ? 'حفظ الهوية والتصميم' : 'Save Identity & Layout'}</span>
+            </button>
+          </div>
+
+          {/* Wallpapers Upload Management */}
+          <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
+            <h3 className="text-base font-extrabold flex items-center gap-2">
+              <ImageIcon className="h-5 w-5 text-blue-500" />
+              <span>
+                {lang === 'ar'
+                  ? 'إدارة خلفيات المتجر للزوار'
+                  : 'Storefront Wallpaper Gallery Manager'}
+              </span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم الخلفية (عربي)' : 'Wallpaper Label (AR)'}
+                </label>
+                <input
+                  type="text"
+                  value={newWpLabelAr}
+                  onChange={(e) => setNewWpLabelAr(e.target.value)}
+                  placeholder="خلفية سيت أب احترافي"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'اسم الخلفية (إنجليزي)' : 'Wallpaper Label (EN)'}
+                </label>
+                <input
+                  type="text"
+                  value={newWpLabelEn}
+                  onChange={(e) => setNewWpLabelEn(e.target.value)}
+                  placeholder="Pro Setup Wallpaper"
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+              <label className="tech-accent-btn inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold">
+                <Upload className="h-4 w-4" />
+                <span>{lang === 'ar' ? 'رفع خلفية جديدة' : 'Upload Wallpaper'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleUploadWallpaper(e.target.files?.[0])}
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {storeData.wallpapers.map((wp) => (
+                <div
+                  key={wp.id}
+                  className="tech-surface-muted overflow-hidden rounded-xl border"
+                >
+                  <img
+                    src={wp.imageUrl}
+                    alt={wp.labelAr}
+                    className="h-28 w-full object-cover"
+                  />
+                  <div className="flex items-center justify-between p-2.5 text-xs font-bold">
+                    <span className="truncate">{lang === 'ar' ? wp.labelAr : wp.labelEn}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteWallpaper(wp.id)}
+                      className="text-rose-500 hover:underline"
+                    >
+                      {lang === 'ar' ? 'حذف' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: PHONES (SECRET VS PUBLIC), SOCIAL LINKS, OS CENTER & GEMINI STATUS */}
+      {activeTab === 'contacts' && (
+        <div className="space-y-6">
+          <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
+            <h3 className="text-base font-extrabold flex items-center gap-2">
+              <Phone className="h-5 w-5 text-blue-500" />
+              <span>
+                {lang === 'ar'
+                  ? 'أرقام الواتساب (الاستلام السري مقابل التواصل المعلن) وروابط التواصل'
+                  : 'Secret Orders Phone vs Public WhatsApp & Social Links'}
+              </span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-1.5">
+                <label className="block text-xs font-extrabold text-amber-500">
+                  {lang === 'ar'
+                    ? 'رقم واتساب استلام الطلبات المباشر (يفتح للعميل عند إرسال الطلب)'
+                    : 'Orders Receiving WhatsApp Number (Customer Sends Here)'}
+                </label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={branchDraft.secretOrdersPhone}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({ ...prev, secretOrdersPhone: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
+                />
+                <p className="tech-text-secondary text-[11px]">
+                  {lang === 'ar'
+                    ? 'عند ضغط العميل على "إرسال الطلب" يتم فتح رسالة الطلب المنسقة عبر حسابه على واتساب لإرسالها لهذا الرقم مباشرة مع حفظ نسخة في لوحة الإدارة.'
+                    : 'When a customer clicks Submit Order, their WhatsApp opens with the formatted order directed to this number while saving a copy here.'}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-1.5">
+                <label className="block text-xs font-extrabold text-emerald-500">
+                  {lang === 'ar'
+                    ? 'رقم واتساب التواصل المعلن (مربوط بالزر الدائري العائم)'
+                    : 'Public Contact WhatsApp (Floating Button)'}
+                </label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={branchDraft.publicWhatsappNumber}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({
+                      ...prev,
+                      publicWhatsappNumber: e.target.value,
+                    }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-bold">
+                {lang === 'ar'
+                  ? 'رابط Webhook اختياري لإرسال الطلبات في الخلفية (HTTPS)'
+                  : 'Optional Background Order Webhook URL (HTTPS)'}
+              </label>
+              <input
+                type="url"
+                dir="ltr"
+                value={branchDraft.orderWebhookUrl}
+                onChange={(e) =>
+                  setBranchDraft((prev) => ({ ...prev, orderWebhookUrl: e.target.value }))
+                }
+                placeholder="https://your-webhook.example.com/orders"
+                className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-inherit pt-4">
+              {[
+                { key: 'facebookUrl', label: 'Facebook URL' },
+                { key: 'youtubeUrl', label: 'YouTube URL' },
+                { key: 'instagramUrl', label: 'Instagram URL' },
+                { key: 'tiktokUrl', label: 'TikTok URL' },
+              ].map((item) => (
+                <div key={item.key}>
+                  <label className="mb-1 block text-xs font-bold">{item.label}</label>
+                  <input
+                    type="url"
+                    dir="ltr"
+                    value={socialDraft[item.key as keyof typeof socialDraft]}
+                    onChange={(e) =>
+                      setSocialDraft((prev) => ({
+                        ...prev,
+                        [item.key]: e.target.value,
+                      }))
+                    }
+                    className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Automatic Server-Side Gemini Status (no API key input UI per security policy) */}
+            <div className="tech-surface-muted flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3.5 text-xs">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-blue-500" />
+                <div>
+                  <p className="font-extrabold">
+                    {lang === 'ar'
+                      ? 'مساعد خدمة العملاء الذكي (Gemini AI)'
+                      : 'Smart AI Customer Service (Gemini AI)'}
+                  </p>
+                  <p className="tech-text-secondary">
+                    {lang === 'ar'
+                      ? 'يدار بأمان عبر متغيرات الخادم دون كشف المفاتيح في المتصفح'
+                      : 'Managed securely server-side with zero key exposure in browser'}
+                  </p>
+                </div>
+              </div>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 font-bold ${
+                  aiStatus.configured
+                    ? 'bg-emerald-500/15 text-emerald-500'
+                    : 'bg-amber-500/15 text-amber-500'
+                }`}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>
+                  {aiStatus.configured
+                    ? `${aiStatus.model} Connected`
+                    : 'Server Standby Mode'}
+                </span>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                onSaveStoreData(
+                  {
+                    ...storeData,
+                    branch: branchDraft,
+                    socialLinks: socialDraft,
+                  },
+                  lang === 'ar'
+                    ? 'تم حفظ الأرقام وروابط التواصل بنجاح.'
+                    : 'Phones & social links saved.'
+                )
+              }
+              className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-extrabold"
+            >
+              <Save className="h-4 w-4" />
+              <span>{lang === 'ar' ? 'حفظ الأرقام والروابط' : 'Save Phones & Social Links'}</span>
+            </button>
+          </div>
+
+          {/* OS Download Center Links CRUD */}
+          <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
+            <h3 className="text-base font-extrabold flex items-center gap-2">
+              <MonitorDown className="h-5 w-5 text-blue-500" />
+              <span>
+                {lang === 'ar'
+                  ? 'إدارة روابط مركز تحديثات وتحميل الأنظمة (للكمبيوتر)'
+                  : 'Official OS Download Center Links'}
+              </span>
+            </h3>
+
+            <form onSubmit={handleAddOsDownload} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end">
+              <input
+                type="text"
+                required
+                value={newOsTitleAr}
+                onChange={(e) => setNewOsTitleAr(e.target.value)}
+                placeholder={lang === 'ar' ? 'العنوان (عربي)' : 'Title (AR)'}
+                className="tech-surface-muted rounded-xl border px-3 py-2 text-xs outline-none"
+              />
+              <input
+                type="text"
+                value={newOsTitleEn}
+                onChange={(e) => setNewOsTitleEn(e.target.value)}
+                placeholder={lang === 'ar' ? 'العنوان (إنجليزي)' : 'Title (EN)'}
+                className="tech-surface-muted rounded-xl border px-3 py-2 text-xs outline-none"
+              />
+              <select
+                value={newOsVendor}
+                onChange={(e) => setNewOsVendor(e.target.value as OSDownloadItem['vendor'])}
+                className="tech-surface-muted rounded-xl border px-3 py-2 text-xs font-bold outline-none"
+              >
+                <option value="Microsoft">Microsoft</option>
+                <option value="Apple">Apple</option>
+                <option value="NVIDIA">NVIDIA</option>
+                <option value="AMD">AMD</option>
+                <option value="Other">Other</option>
+              </select>
+              <input
+                type="url"
+                required
+                dir="ltr"
+                value={newOsUrl}
+                onChange={(e) => setNewOsUrl(e.target.value)}
+                placeholder="https://..."
+                className="tech-surface-muted rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+              />
+              <button
+                type="submit"
+                className="tech-accent-btn rounded-xl px-4 py-2 text-xs font-extrabold"
+              >
+                {lang === 'ar' ? 'إضافة رابط' : 'Add Link'}
+              </button>
+            </form>
+
+            <div className="space-y-2">
+              {storeData.osDownloads.map((osItem) => (
+                <div
+                  key={osItem.id}
+                  className="tech-surface-muted flex items-center justify-between gap-3 rounded-xl border p-3 text-xs"
+                >
+                  <div className="min-w-0">
+                    <p className="font-extrabold truncate">
+                      [{osItem.vendor}] {lang === 'ar' ? osItem.titleAr : osItem.titleEn}
+                    </p>
+                    <p className="tech-text-secondary truncate font-mono-tabular" dir="ltr">
+                      {osItem.officialUrl}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteOsDownload(osItem.id)}
+                    className="shrink-0 font-bold text-rose-500 hover:underline"
+                  >
+                    {lang === 'ar' ? 'حذف' : 'Delete'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: BRANCH LOCATION & 10-DIGIT ADMIN PIN */}
+      {activeTab === 'branch' && (
+        <form
+          onSubmit={handleUpdatePin}
+          className="tech-surface rounded-2xl border p-5 shadow-sm space-y-5"
+        >
+          <div className="space-y-4">
+            <h3 className="text-base font-extrabold flex items-center gap-2">
+              <MapPin className="h-5 w-5 text-blue-500" />
+              <span>{lang === 'ar' ? 'موقع الفرع وساعات العمل' : 'Branch Location & Hours'}</span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'عنوان الفرع (عربي)' : 'Address (AR)'}
+                </label>
+                <input
+                  type="text"
+                  value={branchDraft.addressAr}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({ ...prev, addressAr: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'عنوان الفرع (إنجليزي)' : 'Address (EN)'}
+                </label>
+                <input
+                  type="text"
+                  value={branchDraft.addressEn}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({ ...prev, addressEn: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'رابط الخريطة (Google Maps)' : 'Google Maps URL'}
+                </label>
+                <input
+                  type="url"
+                  dir="ltr"
+                  value={branchDraft.branchMapUrl}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({ ...prev, branchMapUrl: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'مواعيد العمل (عربي)' : 'Working Hours (AR)'}
+                </label>
+                <input
+                  type="text"
+                  value={branchDraft.workingHoursAr}
+                  onChange={(e) =>
+                    setBranchDraft((prev) => ({ ...prev, workingHoursAr: e.target.value }))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-inherit pt-4 space-y-3">
+            <h3 className="text-base font-extrabold flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-blue-500" />
+              <span>
+                {lang === 'ar'
+                  ? 'الرمز السري للدخول إلى الإدارة (10 أرقام)'
+                  : '10-Digit Admin Security PIN'}
+              </span>
+            </h3>
+            <p className="tech-text-secondary text-xs">
+              {lang === 'ar'
+                ? `الرمز الافتراضي الأولي: ${DEFAULT_STORE_DATA.adminPin} — يمكنك تغييره إلى أي 10 أرقام.`
+                : `Initial default PIN: ${DEFAULT_STORE_DATA.adminPin} — change to any 10 digits.`}
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'الرمز السري الجديد (10 أرقام)' : 'New 10-Digit PIN'}
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  dir="ltr"
+                  maxLength={10}
+                  value={newPin}
+                  onChange={(e) => setNewPin(e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular tracking-widest outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold">
+                  {lang === 'ar' ? 'تأكيد الرمز السري' : 'Confirm 10-Digit PIN'}
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  dir="ltr"
+                  maxLength={10}
+                  value={confirmPin}
+                  onChange={(e) =>
+                    setConfirmPin(e.target.value.replace(/[^\d]/g, '').slice(0, 10))
+                  }
+                  className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-sm font-mono-tabular tracking-widest outline-none"
+                />
+              </div>
+            </div>
           </div>
 
           <button
             type="submit"
-            disabled={isSaving}
-            className="flex min-h-[46px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-6 py-2.5 text-sm font-bold text-slate-950 cursor-pointer"
+            className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-extrabold"
           >
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            <span>{copy.saveAndPublish}</span>
+            <Save className="h-4 w-4" />
+            <span>
+              {lang === 'ar' ? 'حفظ موقع الفرع والرمز السري' : 'Save Branch & Security PIN'}
+            </span>
           </button>
         </form>
       )}
-    </div>
+    </section>
   );
 };

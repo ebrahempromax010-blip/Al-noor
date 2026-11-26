@@ -1,88 +1,175 @@
 export type Language = 'ar' | 'en';
 
-export type MetalType = 'gold' | 'silver';
+export type ThemeMode = 'light' | 'evening' | 'dark' | 'night';
 
-export type KaratType = '24' | '21' | '18' | '925' | '999';
+export type LayoutStyle = 'modern_grid' | 'executive_wide' | 'compact_cards';
 
-export type PricingMode = 'auto' | 'manual';
+export type MainNavTab = 'home' | 'catalog' | 'cart' | 'admin';
 
-export interface MarketRates {
-  gold24: number;
-  gold21: number;
-  gold18: number;
-  goldPound: number;
-  silver925: number;
-  silverSwiss: number;
-  diamondCaratUsd: number;
-  ounceUsd: number;
-  silverOunceUsd: number;
-  usdEgp: number;
-  autoLinkPrices: boolean;
-  lastUpdated: string;
-}
+export type CatalogCategoryTab = 'all' | 'computers' | 'accessories' | 'offers';
 
-export interface Category {
-  id: string;
-  nameAr: string;
-  nameEn: string;
-  icon: string;
-  isSystem?: boolean;
-}
+export type CatalogSortOption = 'latest' | 'price_asc' | 'price_desc' | 'offers_only';
+
+export type ProductCategoryGroup = 'computers' | 'accessories' | 'software';
+
+export type ProductSubType =
+  | 'laptop'
+  | 'desktop_case'
+  | 'custom_build'
+  | 'monitor'
+  | 'headset'
+  | 'mic'
+  | 'keyboard_mouse'
+  | 'bag'
+  | 'software';
 
 export interface Product {
   id: string;
-  code: string;
+  sku: string;
   nameAr: string;
   nameEn: string;
-  categoryId: string;
-  metal: MetalType;
-  karat: KaratType;
-  weightGrams: number;
-  makingChargePerGram: number;
-  pricingMode: PricingMode;
-  manualPrice: number;
+  brand: string;
+  specsAr: string;
+  specsEn: string;
+  categoryGroup: ProductCategoryGroup;
+  subType: ProductSubType;
+  price: number;
   discountPercent: number;
+  inStock: boolean;
+  isFeatured?: boolean;
+  isDefault?: boolean;
   imageUrl: string;
-  descriptionAr?: string;
-  descriptionEn?: string;
+  videoUrl?: string;
+  createdAt?: string;
 }
 
-export interface PromoBannerConfig {
-  enabled: boolean;
+export interface SystemUpdateNotice {
+  id: string;
+  textAr: string;
+  textEn: string;
+  badgeAr: string;
+  badgeEn: string;
+  tone: 'microsoft' | 'apple' | 'driver' | 'security';
+}
+
+export interface OSDownloadItem {
+  id: string;
   titleAr: string;
   titleEn: string;
-  subtitleAr: string;
-  subtitleEn: string;
-  badgeTextAr: string;
-  badgeTextEn: string;
-  discountPercent: number;
+  vendor: 'Microsoft' | 'Apple' | 'NVIDIA' | 'AMD' | 'Other';
+  version: string;
+  sizeLabel: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  officialUrl: string;
+}
+
+export interface DeletedProductRecord {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  categoryGroup: ProductCategoryGroup;
+  specsSummary: string;
+  deletedAt: string;
+}
+
+export interface RestockWatchRequest {
+  id: string;
+  query: string;
+  matchedDeletedProductId?: string | null;
+  createdAt: string;
+  notified: boolean;
+  notifiedProductId?: string;
+}
+
+export interface OrderItem {
+  productId: string;
+  nameAr: string;
+  nameEn: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export type WhatsappDispatchStatus =
+  | 'opened_whatsapp_client'
+  | 'sent_via_cloud_api'
+  | 'sent_via_gateway'
+  | 'sent_via_webhook'
+  | 'saved_in_admin';
+
+export interface CustomerOrder {
+  id: string;
+  customerName: string;
+  customerAddress: string;
+  customerPhone: string;
+  note: string;
+  items: OrderItem[];
+  total: number;
+  currency: string;
+  status: 'new' | 'contacted' | 'delivered';
+  whatsappDispatchStatus?: WhatsappDispatchStatus;
+  whatsappMessageText?: string;
+  createdAt: string;
+}
+
+export interface SocialLinks {
+  facebookUrl: string;
+  youtubeUrl: string;
+  instagramUrl: string;
+  tiktokUrl: string;
+}
+
+export interface StoreWallpaper {
+  id: string;
+  labelAr: string;
+  labelEn: string;
   imageUrl: string;
 }
 
-export type WebsitePresetIcon = 'crown' | 'gem' | 'sparkles' | 'star';
-
 export interface BranchInfo {
-  storeNameAr: string;
-  storeNameEn: string;
-  websiteUrl?: string;
-  websiteIconUrl?: string;
-  websitePresetIcon?: WebsitePresetIcon;
   addressAr: string;
   addressEn: string;
-  whatsappNumber: string;
+  branchMapUrl: string;
+  publicWhatsappNumber: string;
+  secretOrdersPhone: string;
+  orderWebhookUrl: string;
   phoneNumber: string;
   workingHoursAr: string;
   workingHoursEn: string;
 }
 
+export interface StoreSettings {
+  storeNameAr: string;
+  storeNameEn: string;
+  taglineAr: string;
+  taglineEn: string;
+  siteUrl: string;
+  storeIconUrl: string;
+  defaultLanguage: Language;
+  currency: string;
+  heroTitleAr: string;
+  heroTitleEn: string;
+  heroSubtitleAr: string;
+  heroSubtitleEn: string;
+  promoBannerImageUrl: string;
+  promoBadgeAr: string;
+  promoBadgeEn: string;
+  layoutStyle: LayoutStyle;
+}
+
 export interface StoreData {
-  rates: MarketRates;
-  categories: Category[];
-  products: Product[];
-  banner: PromoBannerConfig;
+  settings: StoreSettings;
   branch: BranchInfo;
-  defaultLanguage?: Language;
-  updatedAt: string;
+  socialLinks: SocialLinks;
+  adminPin: string;
+  systemUpdates: SystemUpdateNotice[];
+  osDownloads: OSDownloadItem[];
+  products: Product[];
+  deletedDefaultIds: string[];
+  deletedProductsHistory: DeletedProductRecord[];
+  wallpapers: StoreWallpaper[];
+  orders: CustomerOrder[];
+  updatedAt?: string;
 }
 
 export interface CartItem {
@@ -90,4 +177,29 @@ export interface CartItem {
   quantity: number;
 }
 
-export type CloudSyncStatus = 'connecting' | 'synced' | 'saving' | 'error' | 'offline';
+export interface ChatRecommendedProduct {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  brand: string;
+  price: number;
+  discountPercent: number;
+  finalPrice: number;
+  imageUrl: string;
+  inStock: boolean;
+}
+
+export interface ChatGroundingSource {
+  title: string;
+  uri: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+  isRestockAlert?: boolean;
+  recommendedProducts?: ChatRecommendedProduct[];
+  sources?: ChatGroundingSource[];
+}

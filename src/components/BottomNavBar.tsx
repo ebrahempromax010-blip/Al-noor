@@ -1,111 +1,107 @@
 import React from 'react';
-import { Globe, Heart, Settings, ShoppingBag, Store } from 'lucide-react';
-import { Language } from '../types/store';
-import { t } from '../utils/i18n';
+import { Headphones, Home, Laptop, ShieldCheck, ShoppingCart } from 'lucide-react';
+import { Language, MainNavTab } from '../types/store';
 
 interface BottomNavBarProps {
   lang: Language;
+  activeTab: MainNavTab;
   cartCount: number;
-  wishlistCount: number;
-  activeView: 'store' | 'categories' | 'prices' | 'favorites' | 'admin';
-  onGoStore: () => void;
-  onGoFavorites: () => void;
-  onOpenCart: () => void;
-  onOpenAdmin: () => void;
-  onToggleLanguage: () => void;
+  onSelectTab: (tab: MainNavTab) => void;
 }
 
 export const BottomNavBar: React.FC<BottomNavBarProps> = ({
   lang,
+  activeTab,
   cartCount,
-  wishlistCount,
-  activeView,
-  onGoStore,
-  onGoFavorites,
-  onOpenCart,
-  onOpenAdmin,
-  onToggleLanguage,
+  onSelectTab,
 }) => {
-  const copy = t(lang);
-
   return (
     <nav
-      aria-label={lang === 'ar' ? 'شريط التنقل الرئيسي' : 'Primary Bottom Navigation'}
-      className="fixed bottom-0 inset-x-0 z-40 border-t border-amber-500/25 bg-[#0B0F17]/95 backdrop-blur-md"
+      aria-label={lang === 'ar' ? 'التنقل الرئيسي' : 'Main Navigation'}
+      className="tech-header fixed bottom-0 inset-x-0 z-40 border-t backdrop-blur-lg pb-[env(safe-area-inset-bottom)]"
     >
-      <div className="mx-auto grid h-16 sm:h-14 max-w-7xl grid-cols-5 gap-1 px-1.5 py-1.5 sm:gap-2.5 sm:px-6">
-        {/* 1. Store - Royal Blue #2563EB */}
+      <div className="mx-auto grid max-w-2xl grid-cols-4 items-center px-2 py-1.5">
+        {/* 1. Home (Far Right in RTL) */}
         <button
           type="button"
-          onClick={onGoStore}
-          aria-pressed={activeView === 'store'}
-          className={`flex min-h-[42px] flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-[#2563EB] px-1 sm:px-3 text-[10px] sm:text-sm font-bold text-white shadow transition hover:bg-blue-500 active:scale-[0.98] whitespace-nowrap cursor-pointer ${
-            activeView === 'store' ? 'ring-2 ring-white/60' : 'opacity-90'
+          onClick={() => onSelectTab('home')}
+          data-testid="bottom-nav-home"
+          className={`flex flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[10px] sm:text-[11px] font-bold transition ${
+            activeTab === 'home'
+              ? 'text-blue-600 dark:text-sky-400'
+              : 'tech-text-secondary hover:opacity-80'
           }`}
         >
-          <Store className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-          <span>{copy.navStore}</span>
-        </button>
-
-        {/* 2. Favorites - Rose #E11D48 */}
-        <button
-          type="button"
-          onClick={onGoFavorites}
-          aria-pressed={activeView === 'favorites'}
-          className={`relative flex min-h-[42px] flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-rose-600 px-1 sm:px-3 text-[10px] sm:text-sm font-bold text-white shadow transition hover:bg-rose-500 active:scale-[0.98] whitespace-nowrap cursor-pointer ${
-            activeView === 'favorites' ? 'ring-2 ring-white/70' : 'opacity-95'
-          }`}
-        >
-          <Heart className={`h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0 ${wishlistCount > 0 ? 'fill-white' : ''}`} />
-          <span>{copy.navFavorites}</span>
-          <span
-            data-testid="favorites-badge-count"
-            className="font-mono-tabular absolute top-0.5 end-1 sm:static inline-flex min-w-[16px] sm:min-w-[18px] items-center justify-center rounded-md bg-slate-950/80 px-1 py-0.2 sm:py-0.5 text-[9px] sm:text-[11px] font-extrabold text-white"
-          >
-            {wishlistCount}
+          <Home className="h-5 w-5 shrink-0" />
+          <span className="leading-tight px-0.5 text-center">
+            {lang === 'ar' ? 'الرئيسية' : 'Home'}
           </span>
         </button>
 
-        {/* 3. Cart / Purchases - Emerald Green #10B981 */}
+        {/* 2. Computers & Accessories (Composite icon: Laptop + Headset) */}
         <button
           type="button"
-          onClick={onOpenCart}
-          className="relative flex min-h-[42px] flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-[#10B981] px-1 sm:px-3 text-[10px] sm:text-sm font-bold text-white shadow transition hover:bg-emerald-400 active:scale-[0.98] whitespace-nowrap cursor-pointer"
+          onClick={() => onSelectTab('catalog')}
+          data-testid="bottom-nav-catalog"
+          className={`flex flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[9.5px] sm:text-[11px] font-bold transition ${
+            activeTab === 'catalog'
+              ? 'text-blue-600 dark:text-sky-400'
+              : 'tech-text-secondary hover:opacity-80'
+          }`}
         >
-          <ShoppingBag className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-          <span>{copy.navCart}</span>
-          <span
-            data-testid="cart-badge-count"
-            className="font-mono-tabular absolute top-0.5 end-1 sm:static inline-flex min-w-[16px] sm:min-w-[18px] items-center justify-center rounded-md bg-slate-950/80 px-1 py-0.2 sm:py-0.5 text-[9px] sm:text-[11px] font-extrabold text-white"
-          >
-            {cartCount}
+          <span className="relative inline-flex items-center justify-center shrink-0">
+            <Laptop className="h-5 w-5" />
+            <Headphones className="h-3 w-3 -ms-1.5 -mt-2.5 text-sky-500 rounded-full" />
+          </span>
+          <span className="leading-tight px-0.5 text-center">
+            {lang === 'ar' ? 'كمبيوترات وإكسسوارات' : 'PCs & Gear'}
           </span>
         </button>
 
-        {/* 4. Settings / Admin - Amber Gold #F59E0B */}
+        {/* 3. Shopping Cart */}
         <button
           type="button"
-          onClick={onOpenAdmin}
-          aria-pressed={activeView === 'admin'}
-          className={`flex min-h-[42px] flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-[#F59E0B] px-1 sm:px-3 text-[10px] sm:text-sm font-bold text-slate-950 shadow transition hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap cursor-pointer ${
-            activeView === 'admin' ? 'ring-2 ring-white/70' : ''
+          onClick={() => onSelectTab('cart')}
+          data-testid="bottom-nav-cart"
+          className={`relative flex flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[10px] sm:text-[11px] font-bold transition ${
+            activeTab === 'cart'
+              ? 'text-blue-600 dark:text-sky-400'
+              : 'tech-text-secondary hover:opacity-80'
           }`}
         >
-          <Settings className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-          <span>{copy.navSettings}</span>
+          <span className="relative inline-flex shrink-0">
+            <ShoppingCart className="h-5 w-5" />
+            {cartCount > 0 && (
+              <span
+                data-testid="bottom-nav-cart-badge"
+                className="absolute -top-1.5 -end-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-extrabold text-white"
+              >
+                {cartCount > 99 ? '99+' : cartCount}
+              </span>
+            )}
+          </span>
+          <span className="leading-tight px-0.5 text-center">
+            {lang === 'ar' ? 'سلة المشتريات' : 'Cart'}
+          </span>
         </button>
 
-        {/* 5. Language Switch EN / AR - Blue #3B82F6 */}
+        {/* 4. Admin Panel (Shield/Admin Emblem, NOT Gear) */}
         <button
           type="button"
-          onClick={onToggleLanguage}
-          className="flex min-h-[42px] flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 rounded-xl bg-[#3B82F6] px-1 sm:px-3 text-[10px] sm:text-sm font-bold text-white shadow transition hover:bg-blue-400 active:scale-[0.98] whitespace-nowrap cursor-pointer"
+          onClick={() => onSelectTab('admin')}
+          data-testid="bottom-nav-admin"
+          className={`flex flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[10px] sm:text-[11px] font-bold transition ${
+            activeTab === 'admin'
+              ? 'text-blue-600 dark:text-sky-400'
+              : 'tech-text-secondary hover:opacity-80'
+          }`}
         >
-          <Globe className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-          <span>{copy.navLang}</span>
+          <ShieldCheck className="h-5 w-5 shrink-0" />
+          <span className="leading-tight px-0.5 text-center">
+            {lang === 'ar' ? 'الإدارة' : 'Admin'}
+          </span>
         </button>
       </div>
     </nav>
   );
 };
-

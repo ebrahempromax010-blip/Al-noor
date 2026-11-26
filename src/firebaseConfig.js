@@ -11,6 +11,8 @@ const firebaseConfig = {
   measurementId: "G-LBH9N2WX4D"
 };
 
+export const STORE_DOC_PATH = "computer_tech_store/main_data";
+
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export default app;

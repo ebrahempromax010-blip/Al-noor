@@ -1,387 +1,265 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
-import { CheckCircle2, Gem } from 'lucide-react';
-import { db } from './firebaseConfig';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db, STORE_DOC_PATH } from './firebaseConfig.js';
 import { DEFAULT_STORE_DATA } from './data/defaultStoreData';
 import {
   CartItem,
-  CloudSyncStatus,
+  CatalogCategoryTab,
+  CatalogSortOption,
+  ChatMessage,
+  CustomerOrder,
   Language,
-  MarketRates,
+  MainNavTab,
   Product,
+  RestockWatchRequest,
   StoreData,
+  ThemeMode,
 } from './types/store';
-import { t } from './utils/i18n';
-import { fetchGlobalSpotRates } from './utils/marketApi';
+import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
 import {
-  calculateCartSummary,
-  filterProducts,
+  applyRemoteStoreData,
+  findRestockMatches,
+  formatWhatsappOrderMessage,
   getEffectiveSiteIdentity,
-  getWishlistProducts,
-  sanitizeForFirestore,
-  toggleWishlistItem,
+  isDesktopDevice,
+  sanitizeStoreDataForCloud,
 } from './utils/storeLogic';
 import { Header } from './components/Header';
-import { LiveTickerBar } from './components/LiveTickerBar';
-import { QuickActionBar } from './components/QuickActionBar';
-import { PromoBanner } from './components/PromoBanner';
-import { CategoryBar } from './components/CategoryBar';
-import { ProductCard } from './components/ProductCard';
+import { InstallGuideModal, OfflineBanner } from './components/PWAComponents';
+import {
+  DesktopOnlyNoticeModal,
+  SystemUpdateTickerBar,
+} from './components/SystemUpdateTickerBar';
+import { OSDownloadCenterModal } from './components/OSDownloadCenterModal';
+import { HomeStorefront } from './components/HomeStorefront';
+import { CatalogView } from './components/CatalogView';
+import { CartView } from './components/CartView';
 import { ProductZoomModal } from './components/ProductZoomModal';
-import { BranchContactCard } from './components/BranchContactCard';
+import { UserSettingsModal } from './components/UserSettingsModal';
+import { FloatingWhatsAppButton } from './components/FloatingWhatsAppButton';
 import { BottomNavBar } from './components/BottomNavBar';
-import { CartDrawer } from './components/CartDrawer';
 import { AdminPinModal } from './components/AdminPinModal';
 import { AdminDashboard } from './components/AdminDashboard';
-import { CategoriesGroupView } from './components/CategoriesGroupView';
-import { FavoritesView } from './components/FavoritesView';
-import { LivePricesPage } from './components/LivePricesPage';
-import { LanguageSettingsModal } from './components/LanguageSettingsModal';
-import { OfflineIndicator } from './components/PWAComponents';
-
-const STORE_COLLECTION = 'ashraf_gold_store';
-const STORE_DOC_ID = 'main_data';
-const BROADCAST_CHANNEL_NAME = 'ashraf_gold_live_sync';
 
 export default function App() {
-  const [lang, setLang] = useState<Language>('ar');
-  const langRef = useRef<Language>('ar');
-  const hasManualLangChoice = useRef(false);
-
   const [storeData, setStoreData] = useState<StoreData>(DEFAULT_STORE_DATA);
-  const latestStoreDataRef = useRef<StoreData>(DEFAULT_STORE_DATA);
-  const writeQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('connecting');
+  const [lang, setLang] = useState<Language>('ar');
+  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [selectedWallpaperUrl, setSelectedWallpaperUrl] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<MainNavTab>('home');
+  const [catalogCategory, setCatalogCategory] = useState<CatalogCategoryTab>('all');
+  const [catalogSort, setCatalogSort] = useState<CatalogSortOption>('latest');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Cart & Product Zoom
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [zoomProduct, setZoomProduct] = useState<Product | null>(null);
+  const [toastMsg, setToastMsg] = useState('');
+
+  // Modals: PWA Install, OS Downloads Center / Mobile Alert, User Settings + AI, Admin PIN
+  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+  const isOnline = useOnlineStatus();
+  const [installModalMode, setInstallModalMode] = useState<'ios' | 'desktop' | null>(null);
+  const [osCenterOpen, setOsCenterOpen] = useState(false);
+  const [mobileBlockedAlertOpen, setMobileBlockedAlertOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminPinOpen, setAdminPinOpen] = useState(false);
+
+  // Cloud Sync State
+  const [savingCloud, setSavingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
 
-  useEffect(() => {
-    latestStoreDataRef.current = storeData;
-  }, [storeData]);
+  // AI Customer Service + Restock Notification Watcher State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome-ai',
+      role: 'assistant',
+      text: 'أهلاً بك يا فندم في أشرف تك! معاك مستشارك الذكي.\nاحكيلي بتدور على جهاز لإيه (ألعاب، هندسة ومونتاج، برمجة وشغل، أو إكسسوارات) وميزانيتك التقريبية كام، وهقارنلك الأنسب وأرشحلك أفضل اختيار بأسلوب واضح وبسيط.',
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const [restockWatchlist, setRestockWatchlist] = useState<RestockWatchRequest[]>([]);
+  const [unreadRestockCount, setUnreadRestockCount] = useState(0);
 
-  const [activeCategory, setActiveCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [wishlistIds, setWishlistIds] = useState<string[]>([]);
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isLangModalOpen, setIsLangModalOpen] = useState(false);
-  const [zoomedProduct, setZoomedProduct] = useState<Product | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const initAttemptedRef = useRef(false);
 
-  const [activeView, setActiveView] = useState<
-    'store' | 'categories' | 'prices' | 'favorites' | 'admin'
-  >('store');
-  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
-  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
-
-  const [isRefreshingMarket, setIsRefreshingMarket] = useState(false);
-  const [isSyncingFirefox, setIsSyncingFirefox] = useState(false);
-  const [marketFeedback, setMarketFeedback] = useState<string | null>(null);
-  const [syncToast, setSyncToast] = useState<string | null>(null);
-
-  // Sync HTML dir and lang attributes
-  useEffect(() => {
-    langRef.current = lang;
-    document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
-    document.documentElement.lang = lang;
-  }, [lang]);
-
-  // Helper to apply incoming cloud/broadcast updates cleanly
-  const applyRemoteStoreData = (remote: Partial<StoreData>) => {
-    setStoreData((prev) => ({
-      rates: {
-        ...prev.rates,
-        ...(remote.rates || {}),
-        diamondCaratUsd:
-          remote.rates?.diamondCaratUsd ?? prev.rates.diamondCaratUsd ?? 3850,
-      },
-      categories:
-        Array.isArray(remote.categories) && remote.categories.length > 0
-          ? remote.categories
-          : prev.categories,
-      products: Array.isArray(remote.products) ? remote.products : prev.products,
-      banner: remote.banner || prev.banner,
-      branch: {
-        ...prev.branch,
-        ...(remote.branch || {}),
-      },
-      defaultLanguage: remote.defaultLanguage || prev.defaultLanguage || langRef.current || 'ar',
-      updatedAt: remote.updatedAt || prev.updatedAt,
-    }));
-
-    if (remote.defaultLanguage && !hasManualLangChoice.current) {
-      setLang(remote.defaultLanguage);
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
     }
-  };
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMsg('');
+      toastTimerRef.current = null;
+    }, 3000);
+  }, []);
 
-  // Live Real-Time Cloud Firestore onSnapshot + BroadcastChannel (No localStorage)
   useEffect(() => {
-    const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-    const unsubscribe = onSnapshot(
-      storeDocRef,
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        if (snapshot.exists()) {
-          applyRemoteStoreData(snapshot.data() as Partial<StoreData>);
-        }
-        setSyncStatus('synced');
-        setCloudError(null);
-      },
-      (err) => {
-        setSyncStatus('error');
-        setCloudError(`تعذر المزامنة اللحظية مع Firebase: ${err.message}`);
-      }
-    );
-
-    let bc: BroadcastChannel | null = null;
-    if (typeof BroadcastChannel !== 'undefined') {
-      bc = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-      bc.onmessage = (event) => {
-        if (event.data && typeof event.data === 'object') {
-          applyRemoteStoreData(event.data as Partial<StoreData>);
-        }
-      };
-    }
-
     return () => {
-      unsubscribe();
-      bc?.close();
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
     };
   }, []);
 
-  const broadcastToTabs = (nextData: StoreData) => {
-    if (typeof BroadcastChannel !== 'undefined') {
-      const bc = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-      bc.postMessage(nextData);
-      bc.close();
+  // Close topmost open modal on Escape key
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (adminPinOpen) setAdminPinOpen(false);
+      else if (settingsOpen) setSettingsOpen(false);
+      else if (zoomProduct) setZoomProduct(null);
+      else if (osCenterOpen) setOsCenterOpen(false);
+      else if (mobileBlockedAlertOpen) setMobileBlockedAlertOpen(false);
+      else if (installModalMode) setInstallModalMode(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    adminPinOpen,
+    settingsOpen,
+    zoomProduct,
+    osCenterOpen,
+    mobileBlockedAlertOpen,
+    installModalMode,
+  ]);
+
+  // Apply RTL/LTR & 4-Theme DOM classes cleanly
+  useEffect(() => {
+    const html = document.documentElement;
+    html.lang = lang;
+    html.dir = lang === 'ar' ? 'rtl' : 'ltr';
+  }, [lang]);
+
+  useEffect(() => {
+    const html = document.documentElement;
+    html.classList.remove('theme-light', 'theme-evening', 'theme-dark', 'theme-night', 'dark');
+    html.classList.add(`theme-${theme}`);
+    if (theme !== 'light') {
+      html.classList.add('dark');
     }
-  };
+  }, [theme]);
 
-  const showTimedToast = (msg: string) => {
-    setSyncToast(msg);
-    setTimeout(() => {
-      setSyncToast((current) => (current === msg ? null : current));
-    }, 3500);
-  };
+  // Dynamic <title> & favicon synced with store settings
+  const identity = useMemo(
+    () => getEffectiveSiteIdentity(storeData.settings, lang),
+    [storeData.settings, lang]
+  );
+  useEffect(() => {
+    document.title = `${identity.storeName} — ${identity.tagline}`;
+  }, [identity.storeName, identity.tagline]);
 
-  const formatFirebaseError = (err: unknown, actionLabel: string): string => {
-    if (err && typeof err === 'object') {
-      const code = 'code' in err ? String((err as { code?: unknown }).code || '') : '';
-      const message =
-        'message' in err ? String((err as { message?: unknown }).message || '') : '';
-      if (code || message) {
-        return `${actionLabel}${code ? ` [${code}]` : ''}: ${message}`;
-      }
-    }
-    return `${actionLabel}: حدث خطأ غير متوقع في الاتصال أو الصلاحيات مع Firebase.`;
-  };
-
-  const commitSanitizedStoreData = async (
-    rawNextData: StoreData
-  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-    const previousData = latestStoreDataRef.current;
-    const resolvedDefaultLanguage: Language =
-      rawNextData.defaultLanguage === 'en' || rawNextData.defaultLanguage === 'ar'
-        ? rawNextData.defaultLanguage
-        : previousData.defaultLanguage === 'en' || previousData.defaultLanguage === 'ar'
-          ? previousData.defaultLanguage
-          : langRef.current || 'ar';
-
-    const sanitized = sanitizeForFirestore<StoreData>({
-      ...rawNextData,
-      defaultLanguage: resolvedDefaultLanguage,
-      updatedAt: new Date().toISOString(),
-    });
-
-    setSyncStatus('saving');
-    setCloudError(null);
-    latestStoreDataRef.current = sanitized;
-    setStoreData(sanitized);
-    broadcastToTabs(sanitized);
-
-    try {
-      const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-      await setDoc(storeDocRef, sanitized, { merge: true });
-      setSyncStatus('synced');
-      return { ok: true, data: sanitized };
-    } catch (err) {
-      latestStoreDataRef.current = previousData;
-      setStoreData(previousData);
-      broadcastToTabs(previousData);
-      const msg = formatFirebaseError(err, 'فشل الحفظ السحابي في Firebase');
-      setSyncStatus('error');
-      setCloudError(msg);
-      return { ok: false, error: msg };
-    }
-  };
-
-  const saveStoreToCloud = async (
-    nextData: StoreData
-  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-    const task = () => commitSanitizedStoreData(nextData);
-    const queued = writeQueueRef.current.then(task, task);
-    writeQueueRef.current = queued;
-    return queued;
-  };
-
-  const updateStoreAndPublish = (
-    updater: (latest: StoreData) => StoreData
-  ): Promise<{ ok: boolean; data?: StoreData; error?: string }> => {
-    const task = () => commitSanitizedStoreData(updater(latestStoreDataRef.current));
-    const queued = writeQueueRef.current.then(task, task);
-    writeQueueRef.current = queued;
-    return queued;
-  };
-
-  const fetchLatestFromFirebase = async (): Promise<{
-    ok: boolean;
-    error?: string;
-  }> => {
-    setSyncStatus('connecting');
-    try {
-      const storeDocRef = doc(db, STORE_COLLECTION, STORE_DOC_ID);
-      const snap = await getDoc(storeDocRef);
-      if (snap.exists()) {
-        applyRemoteStoreData(snap.data() as Partial<StoreData>);
-        setSyncStatus('synced');
-        setCloudError(null);
-        return { ok: true };
-      }
-      setSyncStatus('synced');
-      return {
-        ok: false,
-        error:
-          'لم يتم العثور على وثيقة منشورة بعد في السحابة — سيتم إنشاؤها عند أول حفظ.',
-      };
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? `تعذر جلب البيانات من Firebase: ${err.message}`
-          : 'تعذر الاتصال بسحابة Firebase.';
-      setSyncStatus('error');
-      setCloudError(msg);
-      return { ok: false, error: msg };
-    }
-  };
-
-  const handleFirefoxUpdate = async () => {
-    setIsSyncingFirefox(true);
-    const res = await fetchLatestFromFirebase();
-    setIsSyncingFirefox(false);
-    if (res.ok) {
-      showTimedToast(
-        lang === 'ar'
-          ? 'تم تحديث ومزامنة كافة البيانات السحابية بنجاح.'
-          : 'Firefox Update: Live cloud data synced successfully.'
-      );
-    } else {
-      showTimedToast(
-        lang === 'ar'
-          ? 'تم التحقق من المزامنة السحابية الحية.'
-          : 'Firefox Update: Cloud listener active and up to date.'
-      );
-    }
-  };
-
-  const handleRefreshMarket = async (): Promise<{
-    ok: boolean;
-    rates?: MarketRates;
-    error?: string;
-  }> => {
-    setIsRefreshingMarket(true);
-    setMarketFeedback(null);
-    try {
-      const { rates } = await fetchGlobalSpotRates(storeData.rates.usdEgp);
-      const nextRates: MarketRates = {
-        ...latestStoreDataRef.current.rates,
-        ...rates,
-      };
-      if (isAdminUnlocked) {
-        const saveRes = await updateStoreAndPublish((latest) => ({
-          ...latest,
-          rates: {
-            ...latest.rates,
-            ...rates,
-          },
-          defaultLanguage: latest.defaultLanguage || langRef.current || 'ar',
-        }));
-        if (!saveRes.ok) {
-          const errMsg = saveRes.error || 'فشل حفظ أسعار البورصة في Firebase.';
-          setMarketFeedback(errMsg);
-          showTimedToast(errMsg);
-          return { ok: false, error: errMsg };
+  // Live Firebase Cloud Firestore real-time synchronization (cleaned up cleanly on unmount)
+  useEffect(() => {
+    let isMounted = true;
+    const storeDocRef = doc(db, STORE_DOC_PATH);
+    const unsubscribe = onSnapshot(
+      storeDocRef,
+      (snapshot) => {
+        if (!isMounted) return;
+        if (snapshot.exists()) {
+          const nextData = applyRemoteStoreData(snapshot.data() as Partial<StoreData>);
+          setStoreData(nextData);
+          setCloudError(null);
+        } else if (!initAttemptedRef.current) {
+          initAttemptedRef.current = true;
+          const cleanInit = sanitizeStoreDataForCloud(DEFAULT_STORE_DATA, 'ar');
+          setDoc(storeDocRef, cleanInit, { merge: true }).catch((err) => {
+            if (isMounted) {
+              console.error('Firestore init write error:', err);
+            }
+          });
         }
-      } else {
-        const nextStoreData: StoreData = sanitizeForFirestore({
-          ...latestStoreDataRef.current,
-          rates: nextRates,
-          defaultLanguage:
-            latestStoreDataRef.current.defaultLanguage || langRef.current || 'ar',
-          updatedAt: new Date().toISOString(),
-        });
-        setStoreData(nextStoreData);
-        broadcastToTabs(nextStoreData);
+      },
+      (err) => {
+        if (!isMounted) return;
+        console.error('Firestore onSnapshot error:', err);
+        setCloudError(err.message);
       }
-      const msg =
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  // Restock Watch Matcher: detects when Admin adds/restocks a product matching a customer request
+  useEffect(() => {
+    const pendingWatches = restockWatchlist.filter((w) => !w.notified);
+    if (pendingWatches.length === 0) return;
+
+    const matches = findRestockMatches(storeData.products, pendingWatches);
+    if (matches.length === 0) return;
+
+    const matchedWatchIds = new Set(matches.map((m) => m.watchId));
+    setRestockWatchlist((prev) =>
+      prev.map((w) => {
+        const hit = matches.find((m) => m.watchId === w.id);
+        return hit ? { ...w, notified: true, notifiedProductId: hit.product.id } : w;
+      })
+    );
+
+    const newAlerts: ChatMessage[] = matches.map((m) => ({
+      id: `restock-${m.watchId}-${Date.now()}`,
+      role: 'assistant',
+      isRestockAlert: true,
+      text:
         lang === 'ar'
-          ? `تم تحديث أسعار البورصة العالمية (${new Date().toLocaleTimeString('ar-EG')})`
-          : `Global Exchange rates updated (${new Date().toLocaleTimeString('en-US')})`;
-      setMarketFeedback(msg);
-      showTimedToast(msg);
-      return { ok: true, rates: nextRates };
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : lang === 'ar'
-            ? 'تعذر تحديث أسعار البورصة حالياً.'
-            : 'Unable to fetch global spot rates right now.';
-      setMarketFeedback(msg);
-      showTimedToast(msg);
-      return { ok: false, error: msg };
-    } finally {
-      setIsRefreshingMarket(false);
-    }
-  };
+          ? `بشرى سارة! توفر الآن المنتج الذي سألت عنه: "${m.product.nameAr}" بسعر ${m.product.price.toLocaleString('en-US')} ${storeData.settings.currency}. يمكنك طلبه الآن من المتجر!`
+          : `Good news! "${m.product.nameEn}" is now back in stock at ${m.product.price.toLocaleString('en-US')} ${storeData.settings.currency}.`,
+      createdAt: new Date().toISOString(),
+    }));
 
-  const filteredProducts = useMemo(
-    () => filterProducts(storeData.products, activeCategory, searchQuery),
-    [storeData.products, activeCategory, searchQuery]
-  );
+    setChatMessages((prev) => [...prev, ...newAlerts]);
+    setUnreadRestockCount((prev) => prev + matchedWatchIds.size);
+  }, [storeData.products, restockWatchlist, lang, storeData.settings.currency]);
 
-  const wishlistProducts = useMemo(
-    () => getWishlistProducts(storeData.products, wishlistIds),
-    [storeData.products, wishlistIds]
-  );
-
-  const cartSummary = useMemo(
-    () =>
-      calculateCartSummary(
-        cart,
-        storeData.products,
-        storeData.rates,
-        storeData.rates.autoLinkPrices
-      ),
-    [cart, storeData.products, storeData.rates]
-  );
-
-  const handleToggleFavorite = (productId: string) => {
-    setWishlistIds((prev) => toggleWishlistItem(prev, productId));
-  };
-
-  const handleAddToCart = (productId: string) => {
-    setCart((prev) => {
-      const existing = prev.find((item) => item.productId === productId);
-      if (existing) {
-        return prev.map((item) =>
-          item.productId === productId
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
-        );
+  const handleSaveStoreData = useCallback(
+    async (nextData: StoreData, successMsg: string) => {
+      setSavingCloud(true);
+      setCloudError(null);
+      try {
+        const sanitized = sanitizeStoreDataForCloud(nextData, lang);
+        const storeDocRef = doc(db, STORE_DOC_PATH);
+        await setDoc(storeDocRef, sanitized, { merge: true });
+        setStoreData(applyRemoteStoreData(sanitized));
+        showToast(successMsg);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Firebase sync error';
+        setCloudError(message);
+        throw err;
+      } finally {
+        setSavingCloud(false);
       }
-      return [...prev, { productId, quantity: 1 }];
-    });
-  };
+    },
+    [lang, showToast]
+  );
 
-  const handleUpdateCartQty = (productId: string, delta: number) => {
+  // Add/Update Cart (memoized callbacks prevent ProductCard re-renders)
+  const handleAddToCart = useCallback(
+    (product: Product) => {
+      setCart((prev) => {
+        const existing = prev.find((i) => i.productId === product.id);
+        if (existing) {
+          return prev.map((i) =>
+            i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i
+          );
+        }
+        return [...prev, { productId: product.id, quantity: 1 }];
+      });
+      showToast(
+        lang === 'ar'
+          ? `تمت إضافة "${product.nameAr}" إلى السلة`
+          : `Added "${product.nameEn}" to cart`
+      );
+    },
+    [lang, showToast]
+  );
+
+  const handleUpdateQty = useCallback((productId: string, delta: number) => {
     setCart((prev) =>
       prev
         .map((item) =>
@@ -391,335 +269,333 @@ export default function App() {
         )
         .filter((item) => item.quantity > 0)
     );
-  };
+  }, []);
 
-  const handleRemoveCartItem = (productId: string) => {
+  const handleRemoveFromCart = useCallback((productId: string) => {
     setCart((prev) => prev.filter((item) => item.productId !== productId));
-  };
+  }, []);
 
-  const handleSelectLanguage = (nextLang: Language) => {
-    hasManualLangChoice.current = true;
-    setLang(nextLang);
-  };
+  // Order Submission: opens customer's WhatsApp with pre-filled message & saves order in Firestore
+  const handleSubmitOrder = async (order: CustomerOrder) => {
+    const formattedMessage = order.whatsappMessageText || formatWhatsappOrderMessage(order);
+    let enrichedOrder: CustomerOrder = {
+      ...order,
+      whatsappDispatchStatus: order.whatsappDispatchStatus || 'opened_whatsapp_client',
+      whatsappMessageText: formattedMessage,
+    };
 
-  const copy = t(lang);
-  const siteIdentity = useMemo(
-    () => getEffectiveSiteIdentity(storeData, lang),
-    [storeData, lang]
-  );
-
-  // Sync live browser title, canonical/og:url link, and favicon icon whenever cloud identity changes
-  useEffect(() => {
-    const fullTitle = `${siteIdentity.name} — ${copy.brandSubtitle}`;
-    document.title = fullTitle;
-
-    const ogTitle = document.querySelector<HTMLMetaElement>('meta[property="og:title"]');
-    if (ogTitle) ogTitle.content = fullTitle;
-
-    const appleTitle = document.querySelector<HTMLMetaElement>(
-      'meta[name="apple-mobile-web-app-title"]'
-    );
-    if (appleTitle) appleTitle.content = siteIdentity.name;
-
-    let ogUrl = document.querySelector<HTMLMetaElement>('meta[property="og:url"]');
-    if (!ogUrl) {
-      ogUrl = document.createElement('meta');
-      ogUrl.setAttribute('property', 'og:url');
-      document.head.appendChild(ogUrl);
-    }
-    ogUrl.content = siteIdentity.url;
-
-    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
-    if (!canonical) {
-      canonical = document.createElement('link');
-      canonical.rel = 'canonical';
-      document.head.appendChild(canonical);
-    }
-    canonical.href = siteIdentity.url;
-
-    const iconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-    if (iconLink) {
-      iconLink.href = siteIdentity.faviconHref;
-      if (
-        siteIdentity.faviconHref.endsWith('.svg') ||
-        siteIdentity.faviconHref.startsWith('data:image/svg+xml')
-      ) {
-        iconLink.type = 'image/svg+xml';
-      } else {
-        iconLink.removeAttribute('type');
+    if (storeData.branch.orderWebhookUrl && storeData.branch.orderWebhookUrl.trim()) {
+      try {
+        await fetch('/api/orders/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: order.id,
+            customerName: order.customerName,
+            customerAddress: order.customerAddress,
+            customerPhone: order.customerPhone,
+            note: order.note,
+            total: order.total,
+            currency: order.currency,
+            items: order.items,
+            targetWhatsappNumber:
+              storeData.branch.secretOrdersPhone ||
+              storeData.branch.publicWhatsappNumber ||
+              '201025134582',
+            webhookUrl: storeData.branch.orderWebhookUrl,
+          }),
+        });
+      } catch {
+        // Firestore persistence + customer WhatsApp remain primary
       }
     }
 
-    const appleIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
-    if (appleIcon) {
-      appleIcon.href = siteIdentity.iconUrl || '/apple-touch-icon.png';
+    const nextOrders = [enrichedOrder, ...(storeData.orders || [])];
+    await handleSaveStoreData(
+      {
+        ...storeData,
+        orders: nextOrders,
+      },
+      lang === 'ar'
+        ? 'تم فتح واتساب لإرسال طلبك وحفظ نسخة في المتجر!'
+        : 'WhatsApp opened with your order & saved in store!'
+    );
+
+    setCart([]);
+  };
+
+  const handleInstallClick = async () => {
+    if (isIOS) {
+      setInstallModalMode('ios');
+      return;
     }
-  }, [siteIdentity, copy.brandSubtitle]);
+    if (isInstallable) {
+      const accepted = await install();
+      if (!accepted) {
+        setInstallModalMode('desktop');
+      }
+      return;
+    }
+    setInstallModalMode('desktop');
+  };
+
+  const handleSystemTickerClick = () => {
+    const desktop = isDesktopDevice(
+      window.navigator.userAgent,
+      window.navigator.maxTouchPoints || 0,
+      window.innerWidth
+    );
+    if (desktop) {
+      setOsCenterOpen(true);
+    } else {
+      setMobileBlockedAlertOpen(true);
+    }
+  };
+
+  const handleBottomNavSelect = useCallback(
+    (tab: MainNavTab) => {
+      if (tab === 'admin') {
+        if (adminUnlocked) {
+          setActiveTab('admin');
+        } else {
+          setAdminPinOpen(true);
+        }
+        return;
+      }
+      setActiveTab(tab);
+    },
+    [adminUnlocked]
+  );
+
+  const handleNavigateCatalog = useCallback((cat: CatalogCategoryTab) => {
+    setCatalogCategory(cat);
+    setActiveTab('catalog');
+  }, []);
+
+  const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleClearUnreadRestock = useCallback(() => setUnreadRestockCount(0), []);
+  const handleAppendChatMessage = useCallback(
+    (msg: ChatMessage) => setChatMessages((prev) => [...prev, msg]),
+    []
+  );
+  const handleResetChat = useCallback(() => {
+    setChatMessages([
+      {
+        id: `welcome-ai-${Date.now()}`,
+        role: 'assistant',
+        text:
+          lang === 'ar'
+            ? 'أهلاً بك من جديد! قولي بتدور على إيه دلوقتي أو ميزانيتك كام وهساعدك فوراً.'
+            : 'Fresh conversation started! Tell me what setup or budget you have in mind and I will guide you.',
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+  }, [lang]);
+  const handleRegisterRestockWatch = useCallback(
+    (watch: RestockWatchRequest) => setRestockWatchlist((prev) => [...prev, watch]),
+    []
+  );
+
+  const totalCartCount = useMemo(
+    () => cart.reduce((sum, item) => sum + item.quantity, 0),
+    [cart]
+  );
 
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-slate-100">
-      <OfflineIndicator lang={lang} />
+    <div className="relative min-h-screen pb-24 transition-colors">
+      {selectedWallpaperUrl && (
+        <div
+          aria-hidden="true"
+          className="gpu-accelerated pointer-events-none fixed inset-0 -z-10 bg-cover bg-center"
+          style={{
+            backgroundImage: `linear-gradient(to bottom, rgba(10,15,28,0.82), rgba(10,15,28,0.92)), url(${selectedWallpaperUrl})`,
+          }}
+        />
+      )}
+      <OfflineBanner isOnline={isOnline} lang={lang} />
+
+      <SystemUpdateTickerBar
+        lang={lang}
+        updates={storeData.systemUpdates}
+        onTickerClick={handleSystemTickerClick}
+      />
 
       <Header
         lang={lang}
-        storeName={siteIdentity.name}
-        websiteIconUrl={siteIdentity.iconUrl}
-        websitePresetIcon={siteIdentity.presetIcon}
+        storeName={identity.storeName}
+        tagline={identity.tagline}
+        iconUrl={identity.iconUrl}
         searchQuery={searchQuery}
-        onSearchChange={(val) => {
-          setSearchQuery(val);
-          if (activeView !== 'store') setActiveView('store');
+        onSearchChange={(q) => {
+          setSearchQuery(q);
+          if (q.trim() && activeTab === 'cart') {
+            setActiveTab('catalog');
+          }
         }}
-        syncStatus={syncStatus}
-        onBrandClick={() => {
-          setActiveView('store');
-          setActiveCategory('all');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onToggleLanguage={() => setLang((prev) => (prev === 'ar' ? 'en' : 'ar'))}
+        onOpenSettings={() => setSettingsOpen(true)}
+        unreadRestockCount={unreadRestockCount}
+        isPWAInstalled={isInstalled}
+        onInstallClick={handleInstallClick}
+        onLogoClick={() => setActiveTab('home')}
       />
 
-      <LiveTickerBar
-        lang={lang}
-        rates={storeData.rates}
-        isRefreshing={isRefreshingMarket}
-        onRefreshMarket={handleRefreshMarket}
-        refreshFeedback={marketFeedback}
-      />
+      <main className="min-h-[65vh]">
+        {activeTab === 'home' && (
+          <HomeStorefront
+            lang={lang}
+            storeData={storeData}
+            searchQuery={searchQuery}
+            onNavigateCatalog={handleNavigateCatalog}
+            onAddToCart={handleAddToCart}
+            onZoomProduct={setZoomProduct}
+            onOpenSettingsAI={handleOpenSettings}
+          />
+        )}
 
-      <QuickActionBar
-        lang={lang}
-        activeView={activeView}
-        isRefreshingMarket={isRefreshingMarket}
-        isSyncingFirefox={isSyncingFirefox}
-        onOpenCategories={() => {
-          setActiveView('categories');
-          window.scrollTo({ top: 0 });
-        }}
-        onOpenPricesPage={() => {
-          setActiveView('prices');
-          window.scrollTo({ top: 0 });
-        }}
-        onGlobalExchange={handleRefreshMarket}
-        onFirefoxUpdate={handleFirefoxUpdate}
-        onOpenLanguageSettings={() => setIsLangModalOpen(true)}
-      />
+        {activeTab === 'catalog' && (
+          <CatalogView
+            lang={lang}
+            currency={storeData.settings.currency || 'ج.م'}
+            layoutStyle={storeData.settings.layoutStyle}
+            products={storeData.products}
+            categoryTab={catalogCategory}
+            sortBy={catalogSort}
+            searchQuery={searchQuery}
+            onCategoryChange={setCatalogCategory}
+            onSortChange={setCatalogSort}
+            onResetFilters={() => {
+              setCatalogCategory('all');
+              setCatalogSort('latest');
+              setSearchQuery('');
+            }}
+            onAddToCart={handleAddToCart}
+            onZoomProduct={setZoomProduct}
+          />
+        )}
 
-      {syncToast && (
-        <div
-          role="status"
-          className="mx-auto max-w-7xl px-3 pt-3 sm:px-6"
-        >
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/35 bg-emerald-500/15 px-4 py-2 text-xs sm:text-sm font-semibold text-emerald-200">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-            <span>{syncToast}</span>
-          </div>
-        </div>
-      )}
+        {activeTab === 'cart' && (
+          <CartView
+            lang={lang}
+            currency={storeData.settings.currency || 'ج.م'}
+            orderWhatsappNumber={
+              storeData.branch.secretOrdersPhone ||
+              storeData.branch.publicWhatsappNumber ||
+              '201025134582'
+            }
+            cart={cart}
+            products={storeData.products}
+            onUpdateQty={handleUpdateQty}
+            onRemoveItem={handleRemoveFromCart}
+            onBrowseCatalog={() => setActiveTab('catalog')}
+            onSubmitOrder={handleSubmitOrder}
+          />
+        )}
 
-      {activeView === 'admin' && isAdminUnlocked ? (
-        <main>
+        {activeTab === 'admin' && adminUnlocked && (
           <AdminDashboard
             lang={lang}
             storeData={storeData}
-            syncStatus={syncStatus}
+            savingCloud={savingCloud}
             cloudError={cloudError}
-            isRefreshingMarket={isRefreshingMarket}
-            onSaveStoreData={saveStoreToCloud}
-            onUpdateStoreData={updateStoreAndPublish}
-            onFetchFromFirebase={fetchLatestFromFirebase}
-            onRefreshMarketRates={handleRefreshMarket}
-            onExitAdmin={() => setActiveView('store')}
-          />
-        </main>
-      ) : activeView === 'categories' ? (
-        <main>
-          <CategoriesGroupView
-            lang={lang}
-            products={storeData.products}
-            rates={storeData.rates}
-            whatsappNumber={storeData.branch.whatsappNumber}
-            wishlistIds={wishlistIds}
-            onToggleFavorite={handleToggleFavorite}
-            onAddToCart={handleAddToCart}
-            onZoom={setZoomedProduct}
-            onFilterInStore={(catId) => {
-              setActiveCategory(catId);
-              setActiveView('store');
-              window.scrollTo({ top: 0 });
-            }}
-            onBackToStore={() => {
-              setActiveView('store');
-              window.scrollTo({ top: 0 });
+            onSaveStoreData={handleSaveStoreData}
+            onLogout={() => {
+              setAdminUnlocked(false);
+              setActiveTab('home');
             }}
           />
-        </main>
-      ) : activeView === 'favorites' ? (
-        <main>
-          <FavoritesView
-            lang={lang}
-            favoriteProducts={wishlistProducts}
-            rates={storeData.rates}
-            whatsappNumber={storeData.branch.whatsappNumber}
-            onToggleFavorite={handleToggleFavorite}
-            onClearFavorites={() => setWishlistIds([])}
-            onAddToCart={handleAddToCart}
-            onZoom={setZoomedProduct}
-            onBackToStore={() => {
-              setActiveView('store');
-              window.scrollTo({ top: 0 });
-            }}
-          />
-        </main>
-      ) : activeView === 'prices' ? (
-        <main>
-          <LivePricesPage
-            lang={lang}
-            rates={storeData.rates}
-            isRefreshingMarket={isRefreshingMarket}
-            isSyncingFirefox={isSyncingFirefox}
-            onGlobalExchange={handleRefreshMarket}
-            onFirefoxUpdate={handleFirefoxUpdate}
-            onBackToStore={() => {
-              setActiveView('store');
-              window.scrollTo({ top: 0 });
-            }}
-          />
-        </main>
-      ) : (
-        <main className="pb-24">
-          <PromoBanner
-            lang={lang}
-            banner={storeData.banner}
-            onExploreOffers={() => {
-              setActiveCategory('offers');
-              document
-                .getElementById('catalog-grid')
-                ?.scrollIntoView({ behavior: 'smooth' });
-            }}
-          />
+        )}
+      </main>
 
-          <CategoryBar
-            lang={lang}
-            categories={storeData.categories}
-            activeCategory={activeCategory}
-            onSelectCategory={setActiveCategory}
-          />
+      {/* Small Circular Floating WhatsApp Button linked strictly to publicWhatsappNumber */}
+      <FloatingWhatsAppButton
+        lang={lang}
+        publicWhatsappNumber={storeData.branch.publicWhatsappNumber}
+      />
 
-          <section
-            id="catalog-grid"
-            aria-label={lang === 'ar' ? 'معرض المجوهرات' : 'Jewelry Catalog'}
-            className="mx-auto max-w-7xl px-3 pt-5 sm:px-6 sm:pt-7"
-          >
-            {filteredProducts.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl border border-amber-500/20 bg-[#131A26] py-14 px-6 text-center">
-                <Gem className="h-10 w-10 text-amber-400/60" />
-                <p className="mt-3 text-base font-bold text-white">
-                  {copy.noProductsFound}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveCategory('all');
-                    setSearchQuery('');
-                  }}
-                  className="mt-4 rounded-xl bg-amber-500 px-5 py-2.5 text-xs sm:text-sm font-bold text-slate-950 hover:bg-amber-400 cursor-pointer"
-                >
-                  {copy.resetFilters}
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredProducts.map((product, index) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    rates={storeData.rates}
-                    lang={lang}
-                    whatsappNumber={storeData.branch.whatsappNumber}
-                    storeName={siteIdentity.name}
-                    isFavorite={wishlistIds.includes(product.id)}
-                    onToggleFavorite={handleToggleFavorite}
-                    onAddToCart={handleAddToCart}
-                    onZoom={setZoomedProduct}
-                    index={index}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <BranchContactCard lang={lang} branch={storeData.branch} />
-        </main>
-      )}
-
+      {/* 4-Icon Bottom Navigation Bar */}
       <BottomNavBar
         lang={lang}
-        cartCount={cartSummary.totalItems}
-        wishlistCount={wishlistProducts.length}
-        activeView={activeView}
-        onGoStore={() => {
-          setActiveView('store');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onGoFavorites={() => {
-          setActiveView('favorites');
-          window.scrollTo({ top: 0 });
-        }}
-        onOpenCart={() => setIsCartOpen(true)}
-        onOpenAdmin={() => {
-          if (isAdminUnlocked) {
-            setActiveView('admin');
-            window.scrollTo({ top: 0 });
-          } else {
-            setIsPinModalOpen(true);
-          }
-        }}
-        onToggleLanguage={() =>
-          handleSelectLanguage(lang === 'ar' ? 'en' : 'ar')
+        activeTab={activeTab}
+        cartCount={totalCartCount}
+        onSelectTab={handleBottomNavSelect}
+      />
+
+      {/* Modals */}
+      <InstallGuideModal
+        open={installModalMode !== null}
+        mode={installModalMode || 'desktop'}
+        isInstalled={isInstalled}
+        lang={lang}
+        storeName={identity.storeName}
+        onClose={() => setInstallModalMode(null)}
+      />
+
+      <OSDownloadCenterModal
+        open={osCenterOpen}
+        lang={lang}
+        downloads={storeData.osDownloads}
+        onClose={() => setOsCenterOpen(false)}
+      />
+
+      <DesktopOnlyNoticeModal
+        open={mobileBlockedAlertOpen}
+        lang={lang}
+        message={
+          lang === 'ar'
+            ? 'مركز تحميل وتحديث أنظمة الويندوز والماك متاح فقط عند فتح الموقع من جهاز كمبيوتر'
+            : 'The Windows & macOS official download and update center is only available when opening the site from a desktop computer.'
         }
-      />
-
-      <CartDrawer
-        isOpen={isCartOpen}
-        lang={lang}
-        summary={cartSummary}
-        branch={storeData.branch}
-        onClose={() => setIsCartOpen(false)}
-        onUpdateQty={handleUpdateCartQty}
-        onRemoveItem={handleRemoveCartItem}
-        onClearCart={() => setCart([])}
-      />
-
-      <LanguageSettingsModal
-        isOpen={isLangModalOpen}
-        lang={lang}
-        onSelectLanguage={handleSelectLanguage}
-        onClose={() => setIsLangModalOpen(false)}
+        onClose={() => setMobileBlockedAlertOpen(false)}
       />
 
       <ProductZoomModal
-        product={zoomedProduct}
-        rates={storeData.rates}
+        product={zoomProduct}
         lang={lang}
-        whatsappNumber={storeData.branch.whatsappNumber}
-        storeName={siteIdentity.name}
-        isFavorite={zoomedProduct ? wishlistIds.includes(zoomedProduct.id) : false}
-        onToggleFavorite={handleToggleFavorite}
-        onClose={() => setZoomedProduct(null)}
+        currency={storeData.settings.currency || 'ج.م'}
+        onClose={() => setZoomProduct(null)}
+        onAddToCart={handleAddToCart}
+      />
+
+      <UserSettingsModal
+        open={settingsOpen}
+        lang={lang}
+        theme={theme}
+        selectedWallpaperUrl={selectedWallpaperUrl}
+        storeData={storeData}
+        chatMessages={chatMessages}
+        unreadRestockCount={unreadRestockCount}
+        onClose={handleCloseSettings}
+        onChangeTheme={setTheme}
+        onSelectWallpaper={setSelectedWallpaperUrl}
+        onAppendChatMessage={handleAppendChatMessage}
+        onResetChat={handleResetChat}
+        onRegisterRestockWatch={handleRegisterRestockWatch}
+        onClearUnreadRestock={handleClearUnreadRestock}
         onAddToCart={handleAddToCart}
       />
 
       <AdminPinModal
-        isOpen={isPinModalOpen}
+        open={adminPinOpen}
         lang={lang}
-        onClose={() => setIsPinModalOpen(false)}
-        onAuthenticated={() => {
-          setIsPinModalOpen(false);
-          setIsAdminUnlocked(true);
-          setActiveView('admin');
-          window.scrollTo({ top: 0 });
+        expectedPin={storeData.adminPin}
+        onSuccess={() => {
+          setAdminPinOpen(false);
+          setAdminUnlocked(true);
+          setActiveTab('admin');
         }}
+        onClose={() => setAdminPinOpen(false)}
       />
+
+      {toastMsg && (
+        <div
+          role="status"
+          className="fixed bottom-24 start-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-extrabold text-white shadow-xl border border-blue-500/30"
+        >
+          {toastMsg}
+        </div>
+      )}
     </div>
   );
 }

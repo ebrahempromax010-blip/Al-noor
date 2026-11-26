@@ -1,186 +1,140 @@
-import React, { useState } from 'react';
-import { Gem, Heart, MessageCircle, ShoppingBag, X } from 'lucide-react';
-import { Language, MarketRates, Product } from '../types/store';
-import { t } from '../utils/i18n';
-import {
-  buildWhatsAppProductUrl,
-  calculateProductPrice,
-  formatCurrency,
-} from '../utils/storeLogic';
+import React from 'react';
+import { CheckCircle2, Play, ShoppingCart, Tag, X } from 'lucide-react';
+import { Language, Product } from '../types/store';
+import { calculateDiscountedPrice, getCategoryGroupLabel } from '../utils/storeLogic';
 
 interface ProductZoomModalProps {
   product: Product | null;
-  rates: MarketRates;
   lang: Language;
-  whatsappNumber: string;
-  storeName?: string;
-  isFavorite?: boolean;
-  onToggleFavorite?: (productId: string) => void;
+  currency: string;
   onClose: () => void;
-  onAddToCart: (productId: string) => void;
+  onAddToCart: (product: Product) => void;
 }
 
 export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
   product,
-  rates,
   lang,
-  whatsappNumber,
-  storeName,
-  isFavorite = false,
-  onToggleFavorite,
+  currency,
   onClose,
   onAddToCart,
 }) => {
-  const [zoomed, setZoomed] = useState(false);
-
   if (!product) return null;
 
-  const copy = t(lang);
-  const price = calculateProductPrice(product, rates, rates.autoLinkPrices);
   const name = lang === 'ar' ? product.nameAr : product.nameEn;
-  const description = lang === 'ar' ? product.descriptionAr : product.descriptionEn;
-  const whatsappUrl = buildWhatsAppProductUrl(
-    whatsappNumber,
-    product,
-    price.finalPrice,
-    lang,
-    storeName
-  );
+  const specs = lang === 'ar' ? product.specsAr : product.specsEn;
+  const finalPrice = calculateDiscountedPrice(product.price, product.discountPercent);
+  const hasDiscount = (product.discountPercent || 0) > 0;
+  const hasVideo = Boolean(product.videoUrl && product.videoUrl.trim());
 
   return (
     <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      aria-label={name}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-6 backdrop-blur-md"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-amber-500/30 bg-[#131A26] shadow-2xl"
+        className="tech-surface animate-panel-in flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border shadow-2xl md:flex-row"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={copy.close}
-          className="absolute top-3 end-3 z-20 flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-black/65 text-white transition hover:bg-black cursor-pointer"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <div className="grid grid-cols-1 md:grid-cols-12">
-          <div
-            className="relative md:col-span-7 overflow-hidden bg-[#0B0F17] cursor-zoom-in"
-            onClick={() => setZoomed((z) => !z)}
-          >
-            {product.imageUrl ? (
-              <img
-                src={product.imageUrl}
-                alt={name}
-                referrerPolicy="no-referrer"
-                className={`h-72 sm:h-96 md:h-full w-full object-cover transition-transform duration-300 ${
-                  zoomed ? 'scale-150 cursor-zoom-out' : 'scale-100'
-                }`}
-              />
-            ) : (
-              <div className="flex h-72 items-center justify-center text-amber-400/50">
-                <Gem className="h-14 w-14" />
+        <div className="relative bg-slate-950 md:w-1/2 flex flex-col justify-center">
+          <img
+            src={product.imageUrl}
+            alt={name}
+            decoding="async"
+            className="max-h-72 w-full object-cover md:max-h-96"
+          />
+          {hasVideo && (
+            <div className="border-t border-slate-800 bg-slate-950 p-3">
+              <div className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-sky-400">
+                <Play className="h-3.5 w-3.5" />
+                <span>{lang === 'ar' ? 'فيديو استعراض المنتج' : 'Product Promo Video'}</span>
               </div>
-            )}
+              <video
+                src={product.videoUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="w-full max-h-48 rounded-lg bg-black object-contain"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-1 flex-col justify-between overflow-y-auto p-6">
+          <div>
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-blue-500">
+                <span>{product.brand}</span>
+                <span>•</span>
+                <span>{getCategoryGroupLabel(product.categoryGroup, lang)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label={lang === 'ar' ? 'إغلاق' : 'Close'}
+                className="tech-surface-muted rounded-lg border p-1.5"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <h2 className="text-lg sm:text-xl font-extrabold leading-snug mb-3">{name}</h2>
+
+            <div className="tech-surface-muted rounded-xl border p-3.5 text-xs sm:text-sm leading-relaxed mb-4">
+              <p className="font-bold mb-1">
+                {lang === 'ar' ? 'المواصفات الفنية:' : 'Technical Specifications:'}
+              </p>
+              <p className="tech-text-secondary">{specs}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs tech-text-secondary mb-4">
+              <span className="inline-flex items-center gap-1 font-mono-tabular">
+                <Tag className="h-3.5 w-3.5 text-blue-500" />
+                SKU: {product.sku}
+              </span>
+              <span className="inline-flex items-center gap-1 text-emerald-500 font-bold">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {product.inStock
+                  ? lang === 'ar'
+                    ? 'متوفر الآن بالضمان الرسمي'
+                    : 'In Stock with Official Warranty'
+                  : lang === 'ar'
+                    ? 'نفذت الكمية حالياً'
+                    : 'Currently Out of Stock'}
+              </span>
+            </div>
           </div>
 
-          <div className="flex flex-col justify-between p-5 sm:p-6 md:col-span-5">
+          <div className="flex items-center justify-between gap-3 border-t border-inherit pt-4">
             <div>
-              <div className="flex items-center gap-2 text-xs text-amber-300 font-semibold">
-                <span>
-                  {product.metal === 'silver'
-                    ? `${copy.silverPrefix} ${product.karat}`
-                    : `${copy.karatPrefix} ${product.karat}`}
+              <div className="flex items-baseline gap-1.5">
+                <span className="font-mono-tabular text-2xl font-extrabold text-blue-600 dark:text-sky-400">
+                  {finalPrice.toLocaleString('en-US')}
                 </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono-tabular text-slate-400">{product.code}</span>
+                <span className="text-sm font-bold">{currency}</span>
               </div>
-
-              <h2 className="mt-2 text-xl font-bold text-white leading-snug">{name}</h2>
-
-              {description && (
-                <p className="mt-2.5 text-sm leading-relaxed text-slate-300">{description}</p>
+              {hasDiscount && (
+                <span className="tech-text-secondary font-mono-tabular text-xs line-through">
+                  {product.price.toLocaleString('en-US')} {currency}
+                </span>
               )}
-
-              <div className="mt-4 space-y-2 border-t border-amber-500/15 pt-4 text-xs text-slate-300">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">{copy.metal}</span>
-                  <span>{product.metal === 'gold' ? copy.gold : copy.silver}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">{copy.weight}</span>
-                  <span className="font-mono-tabular font-semibold">
-                    {product.weightGrams} {copy.gram}
-                  </span>
-                </div>
-              </div>
             </div>
 
-            <div className="mt-6 border-t border-amber-500/15 pt-4">
-              <div className="flex items-baseline gap-2.5">
-                <span className="font-mono-tabular text-2xl font-extrabold text-amber-300">
-                  {formatCurrency(price.finalPrice, lang)}
-                </span>
-                {price.hasDiscount && (
-                  <span className="font-mono-tabular text-sm text-slate-400 line-through">
-                    {formatCurrency(price.originalPrice, lang)}
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2.5">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onAddToCart(product.id);
-                      onClose();
-                    }}
-                    className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#D4AF37] to-[#F59E0B] px-4 py-2.5 text-sm font-bold text-slate-950 hover:brightness-110 cursor-pointer"
-                  >
-                    <ShoppingBag className="h-4 w-4" />
-                    <span>{copy.addToCart}</span>
-                  </button>
-                  {onToggleFavorite && (
-                    <button
-                      type="button"
-                      onClick={() => onToggleFavorite(product.id)}
-                      aria-pressed={isFavorite}
-                      aria-label={
-                        isFavorite
-                          ? `${copy.removeFromFavorites}: ${name}`
-                          : `${copy.addToFavorites}: ${name}`
-                      }
-                      className={`flex min-h-[44px] w-12 items-center justify-center rounded-xl border transition cursor-pointer ${
-                        isFavorite
-                          ? 'border-rose-400/70 bg-rose-500/20 text-rose-400'
-                          : 'border-amber-500/30 bg-[#0B0F17] text-slate-200 hover:border-rose-400/60 hover:text-rose-400'
-                      }`}
-                    >
-                      <Heart
-                        className={`h-5 w-5 ${
-                          isFavorite ? 'fill-rose-500 text-rose-500' : ''
-                        }`}
-                      />
-                    </button>
-                  )}
-                </div>
-                <a
-                  href={whatsappUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-sm font-bold text-emerald-300 hover:bg-emerald-500/25"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  <span>{copy.orderWhatsapp}</span>
-                </a>
-              </div>
-            </div>
+            <button
+              type="button"
+              disabled={!product.inStock}
+              onClick={() => {
+                onAddToCart(product);
+                onClose();
+              }}
+              className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-extrabold shadow-md transition disabled:opacity-50"
+            >
+              <ShoppingCart className="h-4 w-4" />
+              <span>
+                {lang === 'ar' ? 'أضف لسلة المشتريات' : 'Add to Shopping Cart'}
+              </span>
+            </button>
           </div>
         </div>
       </div>

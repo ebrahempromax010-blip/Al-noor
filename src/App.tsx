@@ -390,24 +390,14 @@ export default function App() {
     setInstallModalMode(platform === 'android' ? 'android' : 'desktop');
   };
 
-  // If native prompt becomes ready while Android/Desktop guide modal is open, trigger it immediately
+  // Support ?autoinstall=1 when opened directly in browser tab from iframe preview
   useEffect(() => {
-    if (!installModalMode || installModalMode === 'ios' || !isInstallable) return;
-    let cancelled = false;
-    void install().then((accepted) => {
-      if (!cancelled && accepted) {
-        setInstallModalMode(null);
-        showToast(
-          lang === 'ar'
-            ? 'تم تثبيت التطبيق بنجاح على جهازك!'
-            : 'App installed directly onto your device!'
-        );
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [installModalMode, isInstallable, install, lang, showToast]);
+    if (typeof window === 'undefined' || isInstalled) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autoinstall') === '1') {
+      setInstallModalMode(platform);
+    }
+  }, [platform, isInstalled]);
 
   const handleSystemTickerClick = () => {
     const desktop = isDesktopDevice(
@@ -507,6 +497,7 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         unreadRestockCount={unreadRestockCount}
         isPWAInstalled={isInstalled}
+        uploadedAppFiles={storeData.uploadedAppFiles}
         onInstallClick={handleInstallClick}
         onLogoClick={() => setActiveTab('home')}
       />
@@ -601,6 +592,7 @@ export default function App() {
         isInIframe={isInIframe}
         lang={lang}
         storeName={identity.storeName}
+        uploadedAppFiles={storeData.uploadedAppFiles}
         onTriggerInstantInstall={() => void handleInstallClick()}
         onClose={() => setInstallModalMode(null)}
       />

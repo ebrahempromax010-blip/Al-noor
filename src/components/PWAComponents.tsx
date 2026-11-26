@@ -9,7 +9,8 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { Language } from '../types/store';
+import { Language, UploadedAppFiles } from '../types/store';
+import { formatFileSizeLabel } from '../utils/pwaLogic';
 
 interface PWAInstallButtonProps {
   lang: Language;
@@ -31,7 +32,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
       type="button"
       onClick={onClick}
       data-testid="pwa-install-btn"
-      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-xs sm:text-sm font-bold text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-[0.98] shrink-0"
+      className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-3 text-xs sm:text-sm font-bold text-white shadow-sm shadow-blue-600/25 transition-all hover:bg-blue-700 active:scale-[0.98] shrink-0"
     >
       <Download className="h-4 w-4 shrink-0" />
       <span>{lang === 'ar' ? 'تثبيت التطبيق' : 'Install App'}</span>
@@ -47,6 +48,7 @@ interface InstallGuideModalProps {
   isInIframe?: boolean;
   lang: Language;
   storeName: string;
+  uploadedAppFiles?: UploadedAppFiles;
   onTriggerInstantInstall?: () => void;
   onClose: () => void;
 }
@@ -59,6 +61,7 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
   isInIframe = false,
   lang,
   storeName,
+  uploadedAppFiles,
   onTriggerInstantInstall,
   onClose,
 }) => {
@@ -68,6 +71,9 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?autoinstall=1`
       : '/?autoinstall=1';
+  const androidApk = uploadedAppFiles?.androidApk;
+  const iosApp = uploadedAppFiles?.iosApp;
+  const hasUploadedFiles = Boolean(androidApk?.fileUrl || iosApp?.fileUrl);
 
   return (
     <div
@@ -77,7 +83,7 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="tech-surface w-full max-w-md rounded-2xl border p-6 shadow-2xl"
+        className="tech-surface w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border p-6 shadow-2xl"
         data-testid="install-guide-modal"
         onClick={(e) => e.stopPropagation()}
       >
@@ -92,20 +98,14 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-extrabold">
-                {lang === 'ar' ? `تثبيت تطبيق ${storeName}` : `Install ${storeName} App`}
+                {lang === 'ar'
+                  ? `تثبيت تطبيق ${storeName}`
+                  : `Install ${storeName} App`}
               </h3>
               <p className="tech-text-secondary text-xs">
-                {mode === 'ios'
-                  ? lang === 'ar'
-                    ? 'تثبيت فوري على شاشة الآيفون والآيباد ويعمل كتطبيق مستقل'
-                    : 'Direct standalone install on iPhone & iPad Home Screen'
-                  : mode === 'android'
-                    ? lang === 'ar'
-                      ? 'تثبيت فوري كتطبيق مستقل على هاتف الأندرويد بدون متصفح'
-                      : 'Direct standalone install on Android phone'
-                    : lang === 'ar'
-                      ? 'تثبيت فوري كتطبيق مستقل على الكمبيوتر بدون متصفح'
-                      : 'Direct standalone desktop app (Windows / Mac)'}
+                {lang === 'ar'
+                  ? 'تثبيت فوري مباشر على هاتفك أو جهازك بالأيقونة والاسم تلقائياً'
+                  : 'Instant direct install onto your phone or PC with app icon & name'}
               </p>
             </div>
           </div>
@@ -119,119 +119,157 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
           </button>
         </div>
 
-        {isInstalled ? (
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-500">
-            <div className="flex items-center gap-2 font-bold">
-              <CheckCircle2 className="h-5 w-5 shrink-0" />
+        <div className="space-y-3 text-sm">
+          {isInstalled && (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs sm:text-sm text-emerald-500">
+              <div className="flex items-center gap-2 font-bold">
+                <CheckCircle2 className="h-5 w-5 shrink-0" />
+                <span>
+                  {lang === 'ar'
+                    ? 'التطبيق مثبت بالفعل على جهازك!'
+                    : 'App is already installed on your device!'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {isInstallable && onTriggerInstantInstall && (
+            <button
+              type="button"
+              onClick={onTriggerInstantInstall}
+              data-testid="modal-instant-install-btn"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-extrabold text-white shadow-md transition hover:bg-emerald-500"
+            >
+              <Download className="h-4 w-4" />
               <span>
                 {lang === 'ar'
-                  ? 'التطبيق مثبت الآن ويعمل كتطبيق مستقل مع تخزين داخلي للعمل حتى بدون إنترنت.'
-                  : 'The app is installed and runs standalone with offline caching.'}
+                  ? 'تثبيت التطبيق تلقائياً الآن'
+                  : 'Install App Automatically Now'}
               </span>
-            </div>
-          </div>
-        ) : mode === 'ios' ? (
-          <div className="space-y-3 text-sm">
-            <div className="tech-surface-muted flex items-start gap-3 rounded-xl border p-3.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs font-extrabold text-white">
-                1
-              </div>
-              <div className="flex-1">
-                <p className="font-bold">
-                  {lang === 'ar'
-                    ? 'اضغط على زر المشاركة (Share) أسفل شاشة iPhone'
-                    : 'Tap the Share button at the bottom of your iPhone screen'}
-                </p>
-                <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg bg-blue-600/15 px-2.5 py-1 text-xs font-semibold text-blue-500">
-                  <Share className="h-4 w-4" />
-                  <span>{lang === 'ar' ? 'أيقونة المشاركة' : 'Share Icon'}</span>
-                </div>
-              </div>
-            </div>
+            </button>
+          )}
 
-            <div className="tech-surface-muted flex items-start gap-3 rounded-xl border p-3.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs font-extrabold text-white">
-                2
-              </div>
-              <div className="flex-1">
-                <p className="font-bold">
-                  {lang === 'ar'
-                    ? 'اختر "إضافة إلى الصفحة الرئيسية" (Add to Home Screen)'
-                    : 'Select "Add to Home Screen"'}
-                </p>
-                <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg bg-blue-600/15 px-2.5 py-1 text-xs font-semibold text-blue-500">
-                  <PlusSquare className="h-4 w-4" />
-                  <span>{lang === 'ar' ? 'إضافة إلى الصفحة الرئيسية' : 'Add to Home Screen'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="tech-surface-muted flex items-start gap-3 rounded-xl border p-3.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-xs font-extrabold text-white">
-                3
-              </div>
-              <p className="font-bold">
+          {isInIframe && (
+            <a
+              href={directAppUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="direct-install-window-link"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-500/35 bg-blue-600/10 px-4 py-3 text-xs sm:text-sm font-extrabold text-blue-500 transition hover:bg-blue-600/20"
+            >
+              <Download className="h-4 w-4" />
+              <span>
                 {lang === 'ar'
-                  ? 'اضغط "إضافة" ليظهر التطبيق فوراً على هاتفك ويعمل كتطبيق مستقل بدون شريط المتصفح.'
-                  : 'Tap "Add" to install the standalone app icon directly onto your iPhone.'}
+                  ? 'فتح التثبيت الفوري في المتصفح مباشرة'
+                  : 'Open Instant Install in Browser'}
+              </span>
+            </a>
+          )}
+
+          {mode === 'ios' ? (
+            <div className="tech-surface-muted rounded-xl border p-4 space-y-3">
+              <p className="font-extrabold text-xs sm:text-sm">
+                {lang === 'ar'
+                  ? 'التثبيت المباشر على الآيفون والآيباد (iOS Safari):'
+                  : 'Direct Home Screen Install on iPhone & iPad (Safari):'}
               </p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3 text-sm">
-            {isInstallable && onTriggerInstantInstall && (
-              <button
-                type="button"
-                onClick={onTriggerInstantInstall}
-                data-testid="modal-instant-install-btn"
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-extrabold text-white shadow-md transition hover:bg-emerald-500"
-              >
-                <Download className="h-4 w-4" />
-                <span>
-                  {lang === 'ar' ? 'تثبيت التطبيق فوراً الآن' : 'Install App Instantly Now'}
-                </span>
-              </button>
-            )}
-
-            {isInIframe && (
-              <a
-                href={directAppUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                data-testid="direct-install-window-link"
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-extrabold text-white shadow-md transition hover:bg-blue-500"
-              >
-                <Download className="h-4 w-4" />
-                <span>
+              <div className="flex items-center gap-3">
+                <Share className="h-4 w-4 text-blue-500 shrink-0" />
+                <span className="text-xs sm:text-sm">
                   {lang === 'ar'
-                    ? 'تشغيل المثبّت المباشر بضغطة واحدة'
-                    : 'Launch Direct 1-Tap Installer'}
+                    ? '1. اضغط على زر المشاركة (Share) أسفل شاشة سفاري.'
+                    : '1. Tap the Share button at the bottom of Safari.'}
                 </span>
-              </a>
-            )}
-
-            <div className="tech-surface-muted rounded-xl border p-4 leading-relaxed space-y-1.5">
-              <p className="font-bold">
+              </div>
+              <div className="flex items-center gap-3">
+                <PlusSquare className="h-4 w-4 text-blue-500 shrink-0" />
+                <span className="text-xs sm:text-sm">
+                  {lang === 'ar'
+                    ? '2. اختر "إضافة إلى الصفحة الرئيسية / Add to Home Screen" ثم إضافة.'
+                    : '2. Choose "Add to Home Screen" and tap Add.'}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="tech-surface-muted rounded-xl border p-4 space-y-2">
+              <p className="font-extrabold text-xs sm:text-sm">
                 {mode === 'android'
                   ? lang === 'ar'
-                    ? 'التثبيت المباشر على هاتف أندرويد:'
-                    : 'Direct Install on Android:'
+                    ? 'تثبيت سريع على الهاتف (Android):'
+                    : 'Quick Install on Android:'
                   : lang === 'ar'
-                    ? 'التثبيت المباشر على الكمبيوتر (Windows / Mac):'
-                    : 'Direct Install on Computer (Windows / Mac):'}
+                    ? 'تثبيت سريع على الكمبيوتر (Chrome / Edge):'
+                    : 'Quick Install on Desktop (Chrome / Edge):'}
               </p>
               <p className="tech-text-secondary text-xs leading-relaxed">
                 {mode === 'android'
                   ? lang === 'ar'
-                    ? 'اضغط قائمة المتصفح (⋮) ثم اختر "تثبيت التطبيق" (Install App) ليتم التثبيت فوراً كأيقونة مستقلة تعمل بدون متصفح.'
-                    : 'Open the menu (⋮) and tap "Install App" to add the standalone app directly to your phone.'
+                    ? 'من قائمة المتصفح (⋮) بالأعلى اختر "تثبيت التطبيق / Install App" أو "إضافة للشاشة الرئيسية" ليتم تنزيل الأيقونة والتطبيق فوراً.'
+                    : 'Open Browser Menu (⋮) and tap "Install App" or "Add to Home screen" to install immediately.'
                   : lang === 'ar'
-                    ? 'اضغط أيقونة التثبيت (+) أعلى الشاشة أو من القائمة اختر "تثبيت التطبيق" ليفتح التطبيق مباشرة على سطح المكتب بدون متصفح.'
-                    : 'Click the Install (+) icon in the top bar or choose "Install App" from the menu to run directly as a standalone desktop app.'}
+                    ? 'اضغط أيقونة التثبيت في شريط العنوان بالأعلى أو اختر "Install App" من قائمة المتصفح (⋮).'
+                    : 'Click the Install icon in the address bar or choose "Install App" from the browser menu (⋮).'}
               </p>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Direct Store Binary Downloads — ONLY shown after Admin uploads APK / iOS files */}
+          {hasUploadedFiles && (
+            <div
+              className="tech-surface-muted rounded-xl border border-emerald-500/30 p-4 space-y-2.5"
+              data-testid="modal-uploaded-binaries-section"
+            >
+              <p className="text-xs font-extrabold text-emerald-500">
+                {lang === 'ar'
+                  ? 'تنزيل ملفات التطبيق المباشرة من المتجر:'
+                  : 'Direct App File Downloads:'}
+              </p>
+              <div className="flex flex-col gap-2">
+                {androidApk?.fileUrl && (
+                  <a
+                    href={androidApk.fileUrl}
+                    download={androidApk.fileName || 'Al-Nour-Computer.apk'}
+                    data-testid="modal-download-apk-btn"
+                    className="tech-accent-btn inline-flex w-full items-center justify-between gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold transition"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Download className="h-4 w-4 shrink-0" />
+                      <span>
+                        {lang === 'ar'
+                          ? 'تحميل للأندرويد مباشرة (APK)'
+                          : 'Download Android APK'}
+                      </span>
+                    </span>
+                    <span className="text-[11px] opacity-90 font-mono-tabular" dir="ltr">
+                      {formatFileSizeLabel(androidApk.sizeBytes)}
+                    </span>
+                  </a>
+                )}
+
+                {iosApp?.fileUrl && (
+                  <a
+                    href={iosApp.fileUrl}
+                    download={iosApp.fileName || 'Al-Nour-Computer.ipa'}
+                    data-testid="modal-download-ios-btn"
+                    className="inline-flex w-full items-center justify-between gap-2 rounded-xl border border-blue-500/40 bg-blue-600/15 px-4 py-2.5 text-xs font-extrabold text-blue-500 transition hover:bg-blue-600/25"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Smartphone className="h-4 w-4 shrink-0" />
+                      <span>
+                        {lang === 'ar'
+                          ? 'تحميل للآيفون مباشرة (IPA)'
+                          : 'Download iPhone App (IPA)'}
+                      </span>
+                    </span>
+                    <span className="text-[11px] opacity-90 font-mono-tabular" dir="ltr">
+                      {formatFileSizeLabel(iosApp.sizeBytes)}
+                    </span>
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         <button
           type="button"

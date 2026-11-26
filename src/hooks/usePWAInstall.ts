@@ -238,7 +238,9 @@ export function usePWAInstall() {
   };
 
   const install = async () => {
-    const promptEvt = await waitForDeferredPrompt(550);
+    const immediatePrompt =
+      deferredPromptRef.current || deferredPrompt || window.__deferredPwaPrompt || null;
+    const promptEvt = immediatePrompt || (await waitForDeferredPrompt(350));
     if (!promptEvt) return false;
     try {
       await promptEvt.prompt();

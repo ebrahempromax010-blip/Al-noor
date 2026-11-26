@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  CheckCircle2,
   Cloud,
   Download,
   ExternalLink,
@@ -9,9 +10,15 @@ import {
   RefreshCw,
   ShieldCheck,
   Smartphone,
+  Trash2,
+  Upload,
 } from 'lucide-react';
-import { Language, StoreData } from '../types/store';
-import { resolvePwaEnglishName } from '../utils/pwaLogic';
+import { Language, StoreData, UploadedAppBinary } from '../types/store';
+import {
+  formatFileSizeLabel,
+  resolvePwaEnglishName,
+  validateUploadedAppBinaryFile,
+} from '../utils/pwaLogic';
 import { sanitizeAndroidPackageId } from '../utils/androidProjectGenerator';
 
 interface FilesStatusResponse {
@@ -35,6 +42,7 @@ interface FilesStatusResponse {
 interface AdminFilesPanelProps {
   lang: Language;
   storeData: StoreData;
+  onSaveStoreData: (nextData: StoreData, successMsg: string) => Promise<void>;
 }
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -54,10 +62,15 @@ function extractFilenameFromDisposition(header: string | null, fallbackName: str
   return match?.[1]?.trim() || fallbackName;
 }
 
-export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeData }) => {
+export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({
+  lang,
+  storeData,
+  onSaveStoreData,
+}) => {
   const [status, setStatus] = useState<FilesStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloadingKind, setDownloadingKind] = useState<'apk' | 'aab' | 'aab-kit' | null>(null);
+  const [uploadingPlatform, setUploadingPlatform] = useState<'android' | 'ios' | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -195,6 +208,115 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
     }
   };
 
+  const handleUploadStoreAppBinary = async (
+    platform: 'android' | 'ios',
+    file: File | undefined
+  ) => {
+    if (!file) return;
+    setErrorMsg('');
+    setNotice('');
+
+    const validation = validateUploadedAppBinaryFile(platform, file.name, file.size);
+    if (!validation.ok) {
+      setErrorMsg(lang === 'ar' ? validation.errorAr : validation.errorEn);
+      return;
+    }
+
+    setUploadingPlatform(platform);
+    try {
+      const res = await fetch(
+        `/api/admin/app-binaries/upload?platform=${platform}&fileName=${encodeURIComponent(
+          validation.cleanName
+        )}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'x-file-name': encodeURIComponent(validation.cleanName),
+          },
+          body: file,
+        }
+      );
+
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        binary?: UploadedAppBinary;
+        error?: string;
+      };
+      if (!res.ok || !data.binary) {
+        throw new Error(
+          data.error ||
+            (lang === 'ar' ? 'فشل رفع ملف التطبيق.' : 'Failed to upload app file.')
+        );
+      }
+
+      const nextUploadedFiles = {
+        ...(storeData.uploadedAppFiles || {}),
+        ...(platform === 'android'
+          ? { androidApk: data.binary }
+          : { iosApp: data.binary }),
+      };
+
+      const msg =
+        platform === 'android'
+          ? lang === 'ar'
+            ? `تم رفع "${data.binary.fileName}" وإضافته لأزرار تنزيل الأندرويد بالموقع فوراً!`
+            : `Uploaded "${data.binary.fileName}" and published to storefront downloads!`
+          : lang === 'ar'
+            ? `تم رفع "${data.binary.fileName}" وإضافته لأزرار تنزيل الآيفون بالموقع فوراً!`
+            : `Uploaded "${data.binary.fileName}" and published to storefront downloads!`;
+
+      await onSaveStoreData(
+        {
+          ...storeData,
+          uploadedAppFiles: nextUploadedFiles,
+        },
+        msg
+      );
+      setNotice(msg);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploadingPlatform(null);
+    }
+  };
+
+  const handleRemoveStoreAppBinary = async (platform: 'android' | 'ios') => {
+    setErrorMsg('');
+    setNotice('');
+    setUploadingPlatform(platform);
+    try {
+      await fetch(`/api/admin/app-binaries/${platform}`, { method: 'DELETE' }).catch(() => {});
+      const nextUploadedFiles = {
+        ...(storeData.uploadedAppFiles || {}),
+        ...(platform === 'android' ? { androidApk: null } : { iosApp: null }),
+      };
+      const msg =
+        platform === 'android'
+          ? lang === 'ar'
+            ? 'تمت إزالة ملف الأندرويد (APK) من التنزيلات.'
+            : 'Android APK removed from storefront downloads.'
+          : lang === 'ar'
+            ? 'تمت إزالة ملف الآيفون (IPA) من التنزيلات.'
+            : 'iPhone IPA removed from storefront downloads.';
+      await onSaveStoreData(
+        {
+          ...storeData,
+          uploadedAppFiles: nextUploadedFiles,
+        },
+        msg
+      );
+      setNotice(msg);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to remove file');
+    } finally {
+      setUploadingPlatform(null);
+    }
+  };
+
+  const uploadedAndroid = storeData.uploadedAppFiles?.androidApk || null;
+  const uploadedIos = storeData.uploadedAppFiles?.iosApp || null;
+
   return (
     <div className="space-y-5" data-testid="admin-files-panel">
       {/* Header + Live Dynamic Manifest / SW / Firestore Status */}
@@ -205,14 +327,14 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
               <FolderArchive className="h-5 w-5 text-blue-500" />
               <span>
                 {lang === 'ar'
-                  ? 'قسم ملفات التطبيق الجاهزة (APK & AAB) — للمدير فقط'
-                  : 'Ready App Packages (APK & AAB) — Admin Only'}
+                  ? 'قسم ملفات التطبيق (رفع APK & IPA + حزم النشر) — للمدير فقط'
+                  : 'App Files Manager (Upload APK & IPA + Build Bundles) — Admin Only'}
               </span>
             </h3>
             <p className="tech-text-secondary text-xs mt-1">
               {lang === 'ar'
-                ? 'توليد وتنزيل فوري بضغطة زر مع ربط تلقائي باسم المتجر الإنجليزي، الأيقونة، الرابط الفعلي الحالي، وFirestore.'
-                : 'One-click ready export dynamically synced with English store name, icon, live window.location.origin, and Firestore.'}
+                ? 'ارفع ملف APK للأندرويد أو ملف IPA للآيفون ليظهر مباشرة في تنزيلات الموقع لجميع الزوار بدون قيود، أو أنشئ حزمة APK/AAB جاهزة.'
+                : 'Upload Android APK or iPhone IPA files here to immediately add direct download buttons on the storefront, or export generated APK/AAB packages.'}
             </p>
           </div>
           <button
@@ -236,6 +358,187 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
             {errorMsg || notice}
           </div>
         )}
+
+        {/* Admin Upload Section: Android APK & iPhone IPA published live to Storefront Downloads */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+          {/* Upload Android APK */}
+          <div className="tech-surface-muted rounded-xl border p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-extrabold text-sm">
+                <Smartphone className="h-4 w-4 text-emerald-500" />
+                <span>{lang === 'ar' ? 'رفع ملف الأندرويد (APK)' : 'Upload Android App (APK)'}</span>
+              </div>
+              {uploadedAndroid && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-extrabold text-emerald-500">
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span>{lang === 'ar' ? 'متاح للزوار' : 'Live on Site'}</span>
+                </span>
+              )}
+            </div>
+
+            {uploadedAndroid ? (
+              <div className="tech-surface rounded-xl border p-3 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-extrabold truncate" dir="ltr">
+                    {uploadedAndroid.fileName}
+                  </span>
+                  <span className="tech-text-secondary font-mono-tabular shrink-0" dir="ltr">
+                    {formatFileSizeLabel(uploadedAndroid.sizeBytes)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={uploadedAndroid.fileUrl}
+                    download={uploadedAndroid.fileName}
+                    data-testid="admin-test-apk-download"
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600/15 px-2.5 py-1.5 font-bold text-emerald-500 hover:bg-emerald-600/25"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>{lang === 'ar' ? 'تنزيل الملف' : 'Download'}</span>
+                  </a>
+                  <button
+                    type="button"
+                    disabled={uploadingPlatform !== null}
+                    onClick={() => void handleRemoveStoreAppBinary('android')}
+                    data-testid="admin-remove-apk-btn"
+                    className="inline-flex items-center gap-1 rounded-lg bg-rose-500/10 px-2.5 py-1.5 font-bold text-rose-500 hover:bg-rose-500/20"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>{lang === 'ar' ? 'حذف' : 'Remove'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="tech-text-secondary text-xs leading-relaxed">
+                {lang === 'ar'
+                  ? 'عند رفع ملف .apk هنا، يظهر زر تنزيل الأندرويد المباشر للزوار داخل الموقع فوراً.'
+                  : 'Upload your .apk file here to enable the direct Android APK download button on the storefront.'}
+              </p>
+            )}
+
+            <label className="tech-accent-btn inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold transition">
+              {uploadingPlatform === 'android' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              <span>
+                {uploadingPlatform === 'android'
+                  ? lang === 'ar'
+                    ? 'جاري رفع ملف الأندرويد...'
+                    : 'Uploading APK...'
+                  : uploadedAndroid
+                    ? lang === 'ar'
+                      ? 'استبدال ملف الأندرويد (.apk)'
+                      : 'Replace Android APK (.apk)'
+                    : lang === 'ar'
+                      ? 'اختيار ورفع ملف الأندرويد (.apk)'
+                      : 'Choose & Upload Android (.apk)'}
+              </span>
+              <input
+                type="file"
+                accept=".apk,.aab"
+                disabled={uploadingPlatform !== null}
+                data-testid="upload-android-apk-input"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  void handleUploadStoreAppBinary('android', file);
+                }}
+              />
+            </label>
+          </div>
+
+          {/* Upload iPhone IPA / Profile */}
+          <div className="tech-surface-muted rounded-xl border p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-extrabold text-sm">
+                <Smartphone className="h-4 w-4 text-blue-500" />
+                <span>{lang === 'ar' ? 'رفع ملف الآيفون (IPA / Profile)' : 'Upload iPhone App (IPA)'}</span>
+              </div>
+              {uploadedIos && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/15 px-2 py-0.5 text-[11px] font-extrabold text-blue-500">
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span>{lang === 'ar' ? 'متاح للزوار' : 'Live on Site'}</span>
+                </span>
+              )}
+            </div>
+
+            {uploadedIos ? (
+              <div className="tech-surface rounded-xl border p-3 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-extrabold truncate" dir="ltr">
+                    {uploadedIos.fileName}
+                  </span>
+                  <span className="tech-text-secondary font-mono-tabular shrink-0" dir="ltr">
+                    {formatFileSizeLabel(uploadedIos.sizeBytes)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={uploadedIos.fileUrl}
+                    download={uploadedIos.fileName}
+                    data-testid="admin-test-ios-download"
+                    className="inline-flex items-center gap-1 rounded-lg bg-blue-600/15 px-2.5 py-1.5 font-bold text-blue-500 hover:bg-blue-600/25"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>{lang === 'ar' ? 'تنزيل الملف' : 'Download'}</span>
+                  </a>
+                  <button
+                    type="button"
+                    disabled={uploadingPlatform !== null}
+                    onClick={() => void handleRemoveStoreAppBinary('ios')}
+                    data-testid="admin-remove-ios-btn"
+                    className="inline-flex items-center gap-1 rounded-lg bg-rose-500/10 px-2.5 py-1.5 font-bold text-rose-500 hover:bg-rose-500/20"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>{lang === 'ar' ? 'حذف' : 'Remove'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="tech-text-secondary text-xs leading-relaxed">
+                {lang === 'ar'
+                  ? 'عند رفع ملف .ipa أو .mobileconfig هنا، يظهر زر تنزيل الآيفون المباشر للزوار داخل الموقع فوراً.'
+                  : 'Upload your .ipa or .mobileconfig file here to enable the direct iPhone app download button on the storefront.'}
+              </p>
+            )}
+
+            <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-500/40 bg-blue-600/15 px-4 py-2.5 text-xs font-extrabold text-blue-500 transition hover:bg-blue-600/25">
+              {uploadingPlatform === 'ios' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              <span>
+                {uploadingPlatform === 'ios'
+                  ? lang === 'ar'
+                    ? 'جاري رفع ملف الآيفون...'
+                    : 'Uploading iPhone File...'
+                  : uploadedIos
+                    ? lang === 'ar'
+                      ? 'استبدال ملف الآيفون (.ipa / .mobileconfig)'
+                      : 'Replace iPhone File (.ipa)'
+                    : lang === 'ar'
+                      ? 'اختيار ورفع ملف الآيفون (.ipa / .mobileconfig)'
+                      : 'Choose & Upload iPhone (.ipa)'}
+              </span>
+              <input
+                type="file"
+                accept=".ipa,.mobileconfig"
+                disabled={uploadingPlatform !== null}
+                data-testid="upload-ios-ipa-input"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  void handleUploadStoreAppBinary('ios', file);
+                }}
+              />
+            </label>
+          </div>
+        </div>
 
         {/* Dynamic Manifest, Service Worker, Firestore, & Origin Live Matrix */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">

@@ -157,6 +157,18 @@ export interface StoreSettings {
   layoutStyle: LayoutStyle;
 }
 
+export interface UploadedAppBinary {
+  fileUrl: string;
+  fileName: string;
+  sizeBytes: number;
+  uploadedAt: string;
+}
+
+export interface UploadedAppFiles {
+  androidApk?: UploadedAppBinary | null;
+  iosApp?: UploadedAppBinary | null;
+}
+
 export interface StoreData {
   settings: StoreSettings;
   branch: BranchInfo;
@@ -169,6 +181,7 @@ export interface StoreData {
   deletedProductsHistory: DeletedProductRecord[];
   wallpapers: StoreWallpaper[];
   orders: CustomerOrder[];
+  uploadedAppFiles?: UploadedAppFiles;
   updatedAt?: string;
 }
 

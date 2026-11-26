@@ -444,6 +444,34 @@ export function sanitizeStoreDataForCloud(
       ? rawData.wallpapers
       : DEFAULT_STORE_DATA.wallpapers,
     orders: Array.isArray(rawData.orders) ? rawData.orders : [],
+    uploadedAppFiles: {
+      androidApk:
+        rawData.uploadedAppFiles?.androidApk &&
+        typeof rawData.uploadedAppFiles.androidApk.fileUrl === 'string' &&
+        rawData.uploadedAppFiles.androidApk.fileUrl.trim()
+          ? {
+              fileUrl: rawData.uploadedAppFiles.androidApk.fileUrl.trim(),
+              fileName: String(rawData.uploadedAppFiles.androidApk.fileName || 'app-release.apk'),
+              sizeBytes: Math.max(0, Number(rawData.uploadedAppFiles.androidApk.sizeBytes) || 0),
+              uploadedAt: String(
+                rawData.uploadedAppFiles.androidApk.uploadedAt || new Date().toISOString()
+              ),
+            }
+          : null,
+      iosApp:
+        rawData.uploadedAppFiles?.iosApp &&
+        typeof rawData.uploadedAppFiles.iosApp.fileUrl === 'string' &&
+        rawData.uploadedAppFiles.iosApp.fileUrl.trim()
+          ? {
+              fileUrl: rawData.uploadedAppFiles.iosApp.fileUrl.trim(),
+              fileName: String(rawData.uploadedAppFiles.iosApp.fileName || 'app-ios.ipa'),
+              sizeBytes: Math.max(0, Number(rawData.uploadedAppFiles.iosApp.sizeBytes) || 0),
+              uploadedAt: String(
+                rawData.uploadedAppFiles.iosApp.uploadedAt || new Date().toISOString()
+              ),
+            }
+          : null,
+    },
     updatedAt: new Date().toISOString(),
   };
 

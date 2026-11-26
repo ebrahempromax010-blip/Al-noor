@@ -1817,9 +1817,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </form>
       )}
 
-      {/* TAB 6: FILES (APK & GOOGLE PLAY AAB) */}
+      {/* TAB 6: FILES (UPLOAD APK/IPA & GOOGLE PLAY AAB) */}
       {activeTab === 'files' && (
-        <AdminFilesPanel lang={lang} storeData={storeData} />
+        <AdminFilesPanel
+          lang={lang}
+          storeData={storeData}
+          onSaveStoreData={onSaveStoreData}
+        />
       )}
     </section>
   );

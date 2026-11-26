@@ -1,6 +1,6 @@
 import React from 'react';
-import { Globe, Search, Settings, X } from 'lucide-react';
-import { Language } from '../types/store';
+import { Download, Globe, Search, Settings, Smartphone, X } from 'lucide-react';
+import { Language, UploadedAppFiles } from '../types/store';
 import { PWAInstallButton } from './PWAComponents';
 
 interface HeaderProps {
@@ -14,6 +14,7 @@ interface HeaderProps {
   onOpenSettings: () => void;
   unreadRestockCount: number;
   isPWAInstalled: boolean;
+  uploadedAppFiles?: UploadedAppFiles;
   onInstallClick: () => void;
   onLogoClick: () => void;
 }
@@ -29,15 +30,19 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   unreadRestockCount,
   isPWAInstalled,
+  uploadedAppFiles,
   onInstallClick,
   onLogoClick,
 }) => {
+  const androidApk = uploadedAppFiles?.androidApk;
+  const iosApp = uploadedAppFiles?.iosApp;
+
   return (
     <header className="tech-header sticky top-0 z-30 border-b backdrop-blur-md">
       {/* Row 1: Top-Right Gear (User Settings + AI Support), Center/Brand + Install App, Top-Left Language */}
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2.5 sm:px-6">
         {/* Start side (Far Top-Right in RTL): User Settings Gear + Red Unread Badge */}
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onOpenSettings}
@@ -63,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={onLogoClick}
-            className="flex items-center gap-2.5 text-start min-w-0"
+            className="flex items-center gap-2 text-start min-w-0"
           >
             <img
               src={iconUrl}
@@ -81,8 +86,44 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* End side (Far Top-Left in RTL): Always-visible Install App + Language Toggle */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* End side (Far Top-Left in RTL): Install App + Admin-uploaded APK/IPA Direct Icons + Language Toggle */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {androidApk?.fileUrl && (
+            <a
+              href={androidApk.fileUrl}
+              download={androidApk.fileName || 'Al-Nour-Computer.apk'}
+              data-testid="header-download-apk-btn"
+              title={
+                lang === 'ar'
+                  ? `تنزيل تطبيق الأندرويد (${androidApk.fileName})`
+                  : `Download Android APK (${androidApk.fileName})`
+              }
+              aria-label={lang === 'ar' ? 'تنزيل ملف APK للأندرويد' : 'Download Android APK'}
+              className="inline-flex h-10 items-center gap-1 rounded-xl border border-emerald-500/35 bg-emerald-600/15 px-2 sm:px-2.5 text-[11px] sm:text-xs font-extrabold text-emerald-600 dark:text-emerald-400 transition hover:bg-emerald-600/25 active:scale-95"
+            >
+              <Download className="h-3.5 w-3.5 shrink-0" />
+              <span>APK</span>
+            </a>
+          )}
+
+          {iosApp?.fileUrl && (
+            <a
+              href={iosApp.fileUrl}
+              download={iosApp.fileName || 'Al-Nour-Computer.ipa'}
+              data-testid="header-download-ios-btn"
+              title={
+                lang === 'ar'
+                  ? `تنزيل تطبيق الآيفون (${iosApp.fileName})`
+                  : `Download iPhone App (${iosApp.fileName})`
+              }
+              aria-label={lang === 'ar' ? 'تنزيل ملف الآيفون IPA' : 'Download iPhone IPA'}
+              className="inline-flex h-10 items-center gap-1 rounded-xl border border-blue-500/35 bg-blue-600/15 px-2 sm:px-2.5 text-[11px] sm:text-xs font-extrabold text-blue-600 dark:text-sky-400 transition hover:bg-blue-600/25 active:scale-95"
+            >
+              <Smartphone className="h-3.5 w-3.5 shrink-0" />
+              <span>IPA</span>
+            </a>
+          )}
+
           <PWAInstallButton
             lang={lang}
             isInstalled={isPWAInstalled}

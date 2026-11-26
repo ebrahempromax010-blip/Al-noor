@@ -271,5 +271,9 @@ export const DEFAULT_STORE_DATA: StoreData = {
     },
   ],
   orders: [],
+  uploadedAppFiles: {
+    androidApk: null,
+    iosApp: null,
+  },
   updatedAt: new Date().toISOString(),
 };

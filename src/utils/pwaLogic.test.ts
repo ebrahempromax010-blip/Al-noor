@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildDesktopWebAppLauncherHtml,
   buildDynamicManifestObject,
+  buildIosWebClipMobileConfig,
   buildPwaShortName,
   detectInstallPlatform,
   evaluateInstallButtonVisibility,
+  formatFileSizeLabel,
   resolveInstallClickAction,
   resolvePwaEnglishName,
+  validateUploadedAppBinaryFile,
 } from './pwaLogic.ts';
 
 test('resolvePwaEnglishName and buildPwaShortName enforce English mobile icon names', () => {
@@ -162,3 +166,46 @@ test('buildDynamicManifestObject builds English name and versioned PNG icons', (
   assert.equal(manifest.icons[1].src, '/api/pwa-icon/512.png?v=v42');
   assert.equal(manifest.icons[2].purpose, 'maskable');
 });
+
+test('buildIosWebClipMobileConfig and buildDesktopWebAppLauncherHtml link directly to website', () => {
+  const mobileConfig = buildIosWebClipMobileConfig({
+    storeNameEn: 'Al-Nour Computer',
+    websiteOrigin: 'https://alnour.example.com',
+    iconBase64: 'AQIDBA==',
+  });
+  assert.match(mobileConfig, /<key>FullScreen<\/key>\s*<false\/>/);
+  assert.match(mobileConfig, /<string>https:\/\/alnour\.example\.com\/<\/string>/);
+  assert.match(mobileConfig, /<data>AQIDBA==<\/data>/);
+
+  const desktopHtml = buildDesktopWebAppLauncherHtml({
+    storeNameEn: 'Al-Nour Computer',
+    websiteOrigin: 'https://alnour.example.com',
+  });
+  assert.match(desktopHtml, /https:\/\/alnour\.example\.com\//);
+  assert.match(desktopHtml, /Al-Nour Computer/);
+});
+
+test('validateUploadedAppBinaryFile and formatFileSizeLabel validate Android APK and iOS IPA uploads', () => {
+  const apkOk = validateUploadedAppBinaryFile('android', 'AlNour.apk', 12 * 1024 * 1024);
+  assert.equal(apkOk.ok, true);
+  if (apkOk.ok) {
+    assert.equal(apkOk.ext, '.apk');
+    assert.equal(apkOk.cleanName, 'AlNour.apk');
+  }
+
+  const ipaOk = validateUploadedAppBinaryFile('ios', 'AlNour.ipa', 8 * 1024 * 1024);
+  assert.equal(ipaOk.ok, true);
+  if (ipaOk.ok) {
+    assert.equal(ipaOk.ext, '.ipa');
+  }
+
+  const badAndroid = validateUploadedAppBinaryFile('android', 'AlNour.ipa', 1024);
+  assert.equal(badAndroid.ok, false);
+
+  const badEmpty = validateUploadedAppBinaryFile('ios', 'AlNour.ipa', 0);
+  assert.equal(badEmpty.ok, false);
+
+  assert.equal(formatFileSizeLabel(5 * 1024 * 1024), '5.0 MB');
+  assert.equal(formatFileSizeLabel(4096), '4 KB');
+});
+

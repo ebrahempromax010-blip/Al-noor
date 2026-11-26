@@ -15,10 +15,14 @@ import {
   type AgentUseCase,
 } from './src/utils/aiAgentEngine';
 import {
+  buildDesktopWebAppLauncherHtml,
   buildDynamicManifestObject,
+  buildIosWebClipMobileConfig,
   DEFAULT_PWA_ENGLISH_NAME,
   DEFAULT_PWA_ENGLISH_TAGLINE,
+  MAX_UPLOADED_APP_BYTES,
   resolvePwaEnglishName,
+  validateUploadedAppBinaryFile,
 } from './src/utils/pwaLogic';
 import { buildZipArchive, extractEntryFromZip } from './src/utils/zipBuilder';
 import {
@@ -452,6 +456,200 @@ async function startServer() {
     }
   );
 
+  // Admin App Binary Upload (Android APK / iPhone IPA / Mobileconfig, up to 150MB)
+  const APP_BINARIES_STATE_FILE = path.resolve(UPLOADS_DIR, 'app-binaries-state.json');
+
+  const readAppBinariesState = (): Record<
+    string,
+    { diskName: string; fileName: string; sizeBytes: number; uploadedAt: string }
+  > => {
+    try {
+      if (fs.existsSync(APP_BINARIES_STATE_FILE)) {
+        return JSON.parse(fs.readFileSync(APP_BINARIES_STATE_FILE, 'utf8'));
+      }
+    } catch {
+      // Ignore corrupt metadata file
+    }
+    return {};
+  };
+
+  const writeAppBinariesState = (
+    state: Record<string, { diskName: string; fileName: string; sizeBytes: number; uploadedAt: string }>
+  ) => {
+    try {
+      fs.writeFileSync(APP_BINARIES_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch {
+      // Ignore write warning
+    }
+  };
+
+  app.post(
+    '/api/admin/app-binaries/upload',
+    express.raw({
+      type: '*/*',
+      limit: '150mb',
+    }),
+    async (req, res) => {
+      try {
+        const platformRaw = String(req.query.platform || '').toLowerCase();
+        const platform: 'android' | 'ios' | null =
+          platformRaw === 'android' ? 'android' : platformRaw === 'ios' ? 'ios' : null;
+        if (!platform) {
+          res.status(400).json({ error: 'نوع المنصة غير صالح.' });
+          return;
+        }
+
+        const headerName =
+          typeof req.headers['x-file-name'] === 'string'
+            ? decodeURIComponent(req.headers['x-file-name'])
+            : '';
+        const queryName =
+          typeof req.query.fileName === 'string' ? req.query.fileName : '';
+        const rawFileName = headerName || queryName || (platform === 'android' ? 'app.apk' : 'app.ipa');
+
+        const buffer = req.body as Buffer;
+        if (!Buffer.isBuffer(buffer)) {
+          res.status(400).json({ error: 'تعذر قراءة ملف التطبيق.' });
+          return;
+        }
+
+        const validation = validateUploadedAppBinaryFile(platform, rawFileName, buffer.length);
+        if (!validation.ok) {
+          res.status(buffer.length > MAX_UPLOADED_APP_BYTES ? 413 : 400).json({
+            error: validation.errorAr,
+          });
+          return;
+        }
+
+        const safeStem =
+          validation.cleanName
+            .replace(/\.[^.]+$/, '')
+            .replace(/[^a-zA-Z0-9._-]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'Al-Nour-Computer';
+        const diskName = `app_${platform}_${Date.now()}_${safeStem}${validation.ext}`;
+        const resolved = path.resolve(UPLOADS_DIR, diskName);
+        if (!resolved.startsWith(UPLOADS_DIR + path.sep)) {
+          res.status(400).json({ error: 'مسار الملف غير صالح.' });
+          return;
+        }
+
+        // Remove previous binary for this platform cleanly
+        const currentState = readAppBinariesState();
+        const prev = currentState[platform];
+        if (prev?.diskName) {
+          const prevResolved = path.resolve(UPLOADS_DIR, path.basename(prev.diskName));
+          if (
+            prevResolved.startsWith(UPLOADS_DIR + path.sep) &&
+            prevResolved !== resolved &&
+            fs.existsSync(prevResolved)
+          ) {
+            await fs.promises.unlink(prevResolved).catch(() => {});
+          }
+        }
+
+        await fs.promises.writeFile(resolved, buffer);
+        const uploadedAt = new Date().toISOString();
+        currentState[platform] = {
+          diskName,
+          fileName: validation.cleanName,
+          sizeBytes: buffer.length,
+          uploadedAt,
+        };
+        writeAppBinariesState(currentState);
+
+        const fileUrl = `/api/apps/download/${platform}?file=${encodeURIComponent(
+          diskName
+        )}&name=${encodeURIComponent(validation.cleanName)}`;
+
+        res.status(201).json({
+          ok: true,
+          binary: {
+            fileUrl,
+            fileName: validation.cleanName,
+            sizeBytes: buffer.length,
+            uploadedAt,
+          },
+        });
+      } catch (err) {
+        console.error('App binary upload failed:', err);
+        res.status(500).json({ error: 'تعذر حفظ ملف التطبيق على الخادم.' });
+      }
+    }
+  );
+
+  app.delete('/api/admin/app-binaries/:platform', async (req, res) => {
+    const platformRaw = String(req.params.platform || '').toLowerCase();
+    const platform: 'android' | 'ios' | null =
+      platformRaw === 'android' ? 'android' : platformRaw === 'ios' ? 'ios' : null;
+    if (!platform) {
+      res.status(400).json({ error: 'نوع المنصة غير صالح.' });
+      return;
+    }
+
+    const currentState = readAppBinariesState();
+    const prev = currentState[platform];
+    if (prev?.diskName) {
+      const prevResolved = path.resolve(UPLOADS_DIR, path.basename(prev.diskName));
+      if (prevResolved.startsWith(UPLOADS_DIR + path.sep) && fs.existsSync(prevResolved)) {
+        await fs.promises.unlink(prevResolved).catch(() => {});
+      }
+    }
+    delete currentState[platform];
+    writeAppBinariesState(currentState);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/apps/download/:platform', (req, res) => {
+    const platformRaw = String(req.params.platform || '').toLowerCase();
+    const platform: 'android' | 'ios' | null =
+      platformRaw === 'android' ? 'android' : platformRaw === 'ios' ? 'ios' : null;
+    if (!platform) {
+      res.status(404).end();
+      return;
+    }
+
+    const currentState = readAppBinariesState();
+    const requestedFile =
+      typeof req.query.file === 'string' && req.query.file.trim()
+        ? path.basename(req.query.file.trim())
+        : currentState[platform]?.diskName || '';
+
+    if (
+      !requestedFile ||
+      !/^app_(android|ios)_[a-zA-Z0-9._-]+$/i.test(requestedFile)
+    ) {
+      res.status(404).json({ error: 'لم يتم رفع ملف تطبيق لهذه المنصة بعد.' });
+      return;
+    }
+
+    const resolved = path.resolve(UPLOADS_DIR, requestedFile);
+    if (!resolved.startsWith(UPLOADS_DIR + path.sep) || !fs.existsSync(resolved)) {
+      res.status(404).json({ error: 'الملف غير موجود على الخادم.' });
+      return;
+    }
+
+    const ext = path.extname(requestedFile).toLowerCase();
+    const downloadNameRaw =
+      typeof req.query.name === 'string' && req.query.name.trim()
+        ? req.query.name.trim()
+        : currentState[platform]?.fileName || requestedFile;
+    const safeDownloadName =
+      downloadNameRaw.replace(/["\r\n\\/]/g, '') || `Al-Nour-Computer${ext}`;
+
+    const contentType =
+      ext === '.apk'
+        ? 'application/vnd.android.package-archive'
+        : ext === '.mobileconfig'
+          ? 'application/x-apple-aspen-config; charset=utf-8'
+          : 'application/octet-stream';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(resolved);
+  });
+
   app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '7d' }));
   app.use(express.json({ limit: '2mb' }));
 
@@ -837,6 +1035,76 @@ self.addEventListener("fetch", (event) => {
   app.get('/api/admin/files/android-project.zip', (req, res) => {
     const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
     res.redirect(307, `/api/admin/files/generate/aab${qs ? qs + '&mode=source' : '?mode=source'}`);
+  });
+
+  // Unrestricted all-device app downloads linked directly to the live website
+  app.get('/api/app-download/android', (req, res) => {
+    const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    res.redirect(307, `/api/admin/files/generate/apk${qs}`);
+  });
+
+  app.get('/api/app-download/ios-profile', async (req, res) => {
+    try {
+      const host = req.get('host') || `localhost:${PORT}`;
+      const proto = req.headers['x-forwarded-proto']
+        ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+        : req.protocol || 'http';
+      const querySiteUrl = typeof req.query.siteUrl === 'string' ? req.query.siteUrl.trim() : '';
+      const websiteOrigin =
+        querySiteUrl || androidReleaseConfig.siteUrlOverride || `${proto}://${host}`;
+      const slug =
+        resolvePwaEnglishName(pwaBrandState.storeNameEn)
+          .replace(/[^a-zA-Z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'Al-Nour-Computer';
+
+      let iconBuf = pwaBrandState.iconBuffers['180'];
+      if (!iconBuf) {
+        const fp = path.join(PUBLIC_DIR, 'apple-touch-icon.png');
+        try {
+          iconBuf = await fs.promises.readFile(fp);
+        } catch {
+          iconBuf = null;
+        }
+      }
+
+      const xml = buildIosWebClipMobileConfig({
+        storeNameEn: pwaBrandState.storeNameEn,
+        websiteOrigin,
+        iconBase64: iconBuf ? iconBuf.toString('base64') : null,
+      });
+
+      res.setHeader('Content-Type', 'application/x-apple-aspen-config; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${slug}-iOS.mobileconfig"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(xml);
+    } catch (err) {
+      console.error('Failed to build iOS webclip profile:', err);
+      res.status(500).json({ error: 'تعذر تجهيز ملف التثبيت للآيفون.' });
+    }
+  });
+
+  app.get('/api/app-download/desktop', (req, res) => {
+    const host = req.get('host') || `localhost:${PORT}`;
+    const proto = req.headers['x-forwarded-proto']
+      ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+      : req.protocol || 'http';
+    const querySiteUrl = typeof req.query.siteUrl === 'string' ? req.query.siteUrl.trim() : '';
+    const websiteOrigin =
+      querySiteUrl || androidReleaseConfig.siteUrlOverride || `${proto}://${host}`;
+    const slug =
+      resolvePwaEnglishName(pwaBrandState.storeNameEn)
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'Al-Nour-Computer';
+
+    const html = buildDesktopWebAppLauncherHtml({
+      storeNameEn: pwaBrandState.storeNameEn,
+      websiteOrigin,
+    });
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${slug}-Desktop-App.html"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(html);
   });
 
   app.get('/api/pwa/branding', (_req, res) => {

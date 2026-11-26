@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   BellRing,
   Bot,
+  Coins,
   ExternalLink,
   Image as ImageIcon,
   MapPin,
@@ -27,6 +28,13 @@ import {
   ThemeMode,
 } from '../types/store';
 import { normalizeSafeUrl } from '../utils/storeLogic';
+import {
+  buildRelativeRateTable,
+  CurrencyCode,
+  formatStorePriceDisplay,
+  resolveBaseCurrencyCode,
+} from '../utils/currencyLogic';
+import { CurrencyConverterPanel } from './CurrencyConverterPanel';
 
 interface UserSettingsModalProps {
   open: boolean;
@@ -36,6 +44,13 @@ interface UserSettingsModalProps {
   storeData: StoreData;
   chatMessages: ChatMessage[];
   unreadRestockCount: number;
+  displayCurrency?: CurrencyCode;
+  exchangeRates?: Record<CurrencyCode, number>;
+  ratesSource?: 'live_api' | 'fallback_reference' | 'loading';
+  ratesUpdatedAt?: string;
+  refreshingRates?: boolean;
+  onChangeDisplayCurrency?: (code: CurrencyCode) => void;
+  onRefreshRates?: () => void;
   onClose: () => void;
   onChangeTheme: (theme: ThemeMode) => void;
   onSelectWallpaper: (url: string) => void;
@@ -46,7 +61,7 @@ interface UserSettingsModalProps {
   onAddToCart?: (product: Product) => void;
 }
 
-type SettingsTab = 'ai' | 'theme' | 'wallpapers' | 'social';
+type SettingsTab = 'ai' | 'currency' | 'theme' | 'wallpapers' | 'social';
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   open,
@@ -56,6 +71,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   storeData,
   chatMessages,
   unreadRestockCount,
+  displayCurrency,
+  exchangeRates,
+  ratesSource = 'fallback_reference',
+  ratesUpdatedAt = '',
+  refreshingRates = false,
+  onChangeDisplayCurrency,
+  onRefreshRates,
   onClose,
   onChangeTheme,
   onSelectWallpaper,
@@ -83,6 +105,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   }, [open, activeTab, chatMessages.length]);
 
   if (!open) return null;
+
+  const baseCurrencyLabel = storeData.settings.currency || 'ج.م';
+  const baseCode = resolveBaseCurrencyCode(baseCurrencyLabel);
+  const activeCurrency: CurrencyCode = displayCurrency || baseCode;
+  const activeRatesTable = exchangeRates || buildRelativeRateTable(baseCode, null);
 
   const sendMessageText = async (rawText: string) => {
     const trimmed = rawText.trim();
@@ -365,6 +392,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('currency')}
+            data-testid="settings-tab-currency"
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
+              activeTab === 'currency' ? 'tech-accent-btn' : 'tech-surface-muted border'
+            }`}
+          >
+            <Coins className="h-4 w-4" />
+            <span>
+              {lang === 'ar' ? `العملات (${activeCurrency})` : `Currency (${activeCurrency})`}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('theme')}
             data-testid="settings-tab-theme"
             className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-extrabold transition ${
@@ -464,8 +505,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                                       {lang === 'ar' ? rec.nameAr : rec.nameEn}
                                     </p>
                                     <p className="font-mono-tabular text-[11px] font-bold text-blue-500">
-                                      {rec.finalPrice.toLocaleString('en-US')}{' '}
-                                      {storeData.settings.currency}
+                                      {(() => {
+                                        const formattedRec = formatStorePriceDisplay(
+                                          rec.finalPrice,
+                                          baseCurrencyLabel,
+                                          activeCurrency,
+                                          activeRatesTable,
+                                          lang
+                                        );
+                                        return `${formattedRec.formattedNumber} ${formattedRec.currencyUnit}`;
+                                      })()}
                                     </p>
                                   </div>
                                 </div>
@@ -562,6 +611,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 </button>
               </form>
             </div>
+          )}
+
+          {activeTab === 'currency' && (
+            <CurrencyConverterPanel
+              lang={lang}
+              baseCurrencyLabel={baseCurrencyLabel}
+              selectedCurrency={activeCurrency}
+              rates={activeRatesTable}
+              ratesSource={ratesSource}
+              ratesUpdatedAt={ratesUpdatedAt}
+              refreshingRates={refreshingRates}
+              products={storeData.products}
+              onSelectDisplayCurrency={(code) => onChangeDisplayCurrency?.(code)}
+              onRefreshRates={() => onRefreshRates?.()}
+            />
           )}
 
           {activeTab === 'theme' && (

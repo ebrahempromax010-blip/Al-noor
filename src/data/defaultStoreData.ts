@@ -30,7 +30,7 @@ export const DEFAULT_TECH_PRODUCTS: Product[] = [
     sku: 'PC-CASE-RTX4090',
     nameAr: 'كيسة كمبيوتر تجميعة وورك ستيشن RTX 4090 بتبريد مائي',
     nameEn: 'Custom Liquid-Cooled RTX 4090 Workstation PC Tower',
-    brand: 'Ashraf Custom Build',
+    brand: 'Al-Nour Custom Build',
     specsAr: 'Ryzen 9 9950X • RTX 4090 24GB • RAM 64GB DDR5 • 4TB SSD • PSU 1200W Platinum',
     specsEn: 'Ryzen 9 9950X • RTX 4090 24GB • 64GB DDR5 • 4TB SSD • 1200W Platinum PSU',
     categoryGroup: 'computers',
@@ -119,11 +119,11 @@ export const DEFAULT_TECH_PRODUCTS: Product[] = [
 
 export const DEFAULT_STORE_DATA: StoreData = {
   settings: {
-    storeNameAr: 'أشرف تك',
-    storeNameEn: 'Ashraf Tech',
+    storeNameAr: 'النور للكمبيوتر',
+    storeNameEn: 'Al-Nour Computer',
     taglineAr: 'أجهزة كمبيوتر ولابتوب وإكسسوارات وبرمجيات أصلية',
     taglineEn: 'Computers, Laptops, Accessories & Genuine Software',
-    siteUrl: 'https://ashraf-tech.web.app',
+    siteUrl: 'https://al-nour-computer.web.app',
     storeIconUrl: DEFAULT_STORE_ICON_URL,
     defaultLanguage: 'ar',
     currency: 'ج.م',

@@ -1,31 +1,32 @@
 {
   "id": "/",
-  "name": "أشرف تك | Ashraf Tech — متجر الكمبيوتر واللابتوب",
-  "short_name": "أشرف تك",
-  "description": "منصة ومتجر أشرف تك للكمبيوترات واللابتوب والإكسسوارات والبرمجيات مع مساعد خدمة عملاء ذكي ومزامنة سحابية لحظية.",
+  "name": "Al-Nour Computer",
+  "short_name": "Al-Nour",
+  "description": "Computers, Laptops, Accessories & Genuine Software",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#0A0F1C",
   "theme_color": "#0A0F1C",
-  "dir": "rtl",
-  "lang": "ar",
+  "dir": "ltr",
+  "lang": "en",
+  "prefer_related_applications": false,
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "/api/pwa-icon/192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "/api/pwa-icon/512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-maskable-512x512.png",
+      "src": "/api/pwa-icon/maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

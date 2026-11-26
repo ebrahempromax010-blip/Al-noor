@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Cpu,
+  FolderArchive,
   Globe,
   Image as ImageIcon,
   KeyRound,
@@ -45,6 +46,7 @@ import {
   isValidAdminPin,
   restoreDefaultProducts,
 } from '../utils/storeLogic';
+import { AdminFilesPanel } from './AdminFilesPanel';
 
 interface AdminDashboardProps {
   lang: Language;
@@ -55,7 +57,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-type AdminTab = 'orders' | 'products' | 'identity' | 'contacts' | 'branch';
+type AdminTab = 'orders' | 'products' | 'identity' | 'contacts' | 'branch' | 'files';
 
 const IMAGE_PRESETS = [
   {
@@ -576,6 +578,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             labelAr: 'الفرع والرمز السري',
             labelEn: 'Branch & 10-Digit PIN',
             Icon: KeyRound,
+          },
+          {
+            id: 'files' as AdminTab,
+            labelAr: 'الملفات',
+            labelEn: 'Files',
+            Icon: FolderArchive,
           },
         ].map(({ id, labelAr, labelEn, Icon }) => (
           <button
@@ -1223,7 +1231,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div>
                 <label className="mb-1 block text-xs font-bold">
-                  {lang === 'ar' ? 'اسم المتجر (إنجليزي)' : 'Store Name (EN)'}
+                  {lang === 'ar'
+                    ? 'اسم المتجر (إنجليزي — يظهر على أيقونة التطبيق المثبت)'
+                    : 'Store Name (EN — shown under installed app icon)'}
                 </label>
                 <input
                   type="text"
@@ -1805,6 +1815,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </span>
           </button>
         </form>
+      )}
+
+      {/* TAB 6: FILES (APK & GOOGLE PLAY AAB) */}
+      {activeTab === 'files' && (
+        <AdminFilesPanel lang={lang} storeData={storeData} />
       )}
     </section>
   );

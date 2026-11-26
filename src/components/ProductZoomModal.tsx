@@ -2,11 +2,19 @@ import React from 'react';
 import { CheckCircle2, Play, ShoppingCart, Tag, X } from 'lucide-react';
 import { Language, Product } from '../types/store';
 import { calculateDiscountedPrice, getCategoryGroupLabel } from '../utils/storeLogic';
+import {
+  buildRelativeRateTable,
+  CurrencyCode,
+  formatStorePriceDisplay,
+  resolveBaseCurrencyCode,
+} from '../utils/currencyLogic';
 
 interface ProductZoomModalProps {
   product: Product | null;
   lang: Language;
   currency: string;
+  displayCurrency?: CurrencyCode;
+  exchangeRates?: Record<CurrencyCode, number>;
   onClose: () => void;
   onAddToCart: (product: Product) => void;
 }
@@ -15,6 +23,8 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
   product,
   lang,
   currency,
+  displayCurrency,
+  exchangeRates,
   onClose,
   onAddToCart,
 }) => {
@@ -25,6 +35,22 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
   const finalPrice = calculateDiscountedPrice(product.price, product.discountPercent);
   const hasDiscount = (product.discountPercent || 0) > 0;
   const hasVideo = Boolean(product.videoUrl && product.videoUrl.trim());
+  const baseCode = resolveBaseCurrencyCode(currency);
+  const ratesTable = exchangeRates || buildRelativeRateTable(baseCode, null);
+  const formattedFinal = formatStorePriceDisplay(
+    finalPrice,
+    currency,
+    displayCurrency || baseCode,
+    ratesTable,
+    lang
+  );
+  const formattedOriginal = formatStorePriceDisplay(
+    product.price,
+    currency,
+    displayCurrency || baseCode,
+    ratesTable,
+    lang
+  );
 
   return (
     <div
@@ -110,13 +136,18 @@ export const ProductZoomModal: React.FC<ProductZoomModalProps> = ({
             <div>
               <div className="flex items-baseline gap-1.5">
                 <span className="font-mono-tabular text-2xl font-extrabold text-blue-600 dark:text-sky-400">
-                  {finalPrice.toLocaleString('en-US')}
+                  {formattedFinal.formattedNumber}
                 </span>
-                <span className="text-sm font-bold">{currency}</span>
+                <span className="text-sm font-bold">{formattedFinal.currencyUnit}</span>
               </div>
               {hasDiscount && (
-                <span className="tech-text-secondary font-mono-tabular text-xs line-through">
-                  {product.price.toLocaleString('en-US')} {currency}
+                <span className="tech-text-secondary font-mono-tabular text-xs line-through block">
+                  {formattedOriginal.formattedNumber} {formattedOriginal.currencyUnit}
+                </span>
+              )}
+              {formattedFinal.isConverted && (
+                <span className="tech-text-secondary font-mono-tabular text-[11px] block">
+                  ≈ {finalPrice.toLocaleString('en-US')} {currency}
                 </span>
               )}
             </div>

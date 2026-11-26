@@ -14,6 +14,21 @@ import {
   scoreAndSelectRecommendations,
   type AgentUseCase,
 } from './src/utils/aiAgentEngine';
+import {
+  buildDynamicManifestObject,
+  DEFAULT_PWA_ENGLISH_NAME,
+  DEFAULT_PWA_ENGLISH_TAGLINE,
+  resolvePwaEnglishName,
+} from './src/utils/pwaLogic';
+import { buildZipArchive } from './src/utils/zipBuilder';
+import {
+  buildAndroidProjectFiles,
+  buildAssetLinksJson,
+  DEFAULT_ANDROID_PACKAGE_ID,
+  PLAY_STORE_MIN_SDK,
+  PLAY_STORE_TARGET_SDK,
+  sanitizeAndroidPackageId,
+} from './src/utils/androidProjectGenerator';
 
 dotenv.config();
 
@@ -21,6 +36,115 @@ const PORT = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const RELEASES_DIR = path.resolve(UPLOADS_DIR, 'releases');
+fs.mkdirSync(RELEASES_DIR, { recursive: true });
+
+const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+const STORE_FIRESTORE_REST_URL =
+  'https://firestore.googleapis.com/v1/projects/ashraf-gold/databases/(default)/documents/computer_tech_store/main_data';
+
+const androidReleaseConfig = {
+  packageId: DEFAULT_ANDROID_PACKAGE_ID,
+  versionCode: 1,
+  versionName: '1.0.0',
+  sha256Fingerprint: '',
+  siteUrlOverride: '',
+};
+
+type PwaIconVariant = '180' | '192' | '512' | 'maskable-512';
+
+interface PwaBrandState {
+  storeNameEn: string;
+  taglineEn: string;
+  version: string;
+  iconSourceKey: string;
+  iconBuffers: Record<PwaIconVariant, Buffer | null>;
+}
+
+const pwaBrandState: PwaBrandState = {
+  storeNameEn: DEFAULT_PWA_ENGLISH_NAME,
+  taglineEn: DEFAULT_PWA_ENGLISH_TAGLINE,
+  version: String(Date.now()),
+  iconSourceKey: 'default',
+  iconBuffers: {
+    '180': null,
+    '192': null,
+    '512': null,
+    'maskable-512': null,
+  },
+};
+
+function decodeImageDataUrl(dataUrl?: string): Buffer | null {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+  const match = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  const buf = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (buf.length === 0 || buf.length > 600 * 1024) return null;
+  return buf;
+}
+
+function detectImageMimeType(buf: Buffer): string {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'image/png';
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (buf.length >= 4 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+    return 'image/webp';
+  }
+  return 'image/png';
+}
+
+async function hydrateBrandFromFirestore(): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const res = await fetch(STORE_FIRESTORE_REST_URL, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return;
+    const docJson = (await res.json()) as {
+      fields?: {
+        settings?: {
+          mapValue?: {
+            fields?: {
+              storeNameEn?: { stringValue?: string };
+              taglineEn?: { stringValue?: string };
+              storeIconUrl?: { stringValue?: string };
+            };
+          };
+        };
+      };
+    };
+    const settingsFields = docJson?.fields?.settings?.mapValue?.fields;
+    if (!settingsFields) return;
+
+    const remoteEn = settingsFields.storeNameEn?.stringValue;
+    const remoteTagline = settingsFields.taglineEn?.stringValue;
+    const remoteIcon = settingsFields.storeIconUrl?.stringValue;
+
+    if (remoteEn && remoteEn.trim()) {
+      pwaBrandState.storeNameEn = resolvePwaEnglishName(remoteEn);
+    }
+    if (remoteTagline && remoteTagline.trim()) {
+      pwaBrandState.taglineEn = remoteTagline.trim();
+    }
+    if (remoteIcon && remoteIcon.startsWith('data:image/')) {
+      const buf = decodeImageDataUrl(remoteIcon);
+      if (buf) {
+        pwaBrandState.iconBuffers['180'] = buf;
+        pwaBrandState.iconBuffers['192'] = buf;
+        pwaBrandState.iconBuffers['512'] = buf;
+        pwaBrandState.iconBuffers['maskable-512'] = buf;
+        pwaBrandState.iconSourceKey = `${pwaBrandState.storeNameEn}::firestore`;
+      }
+    }
+    pwaBrandState.version = String(Date.now());
+  } catch {
+    // Keep clean defaults if Firestore is temporarily unreachable at boot
+  }
+}
 
 const ALLOWED_VIDEO_TYPES: Record<string, string> = {
   'video/mp4': '.mp4',
@@ -327,16 +451,383 @@ async function startServer() {
     }
   );
 
+  // Binary APK / AAB upload endpoint (up to 120MB) — mounted before express.json
+  app.post(
+    '/api/admin/files/upload/:kind',
+    express.raw({
+      type: () => true,
+      limit: '120mb',
+    }),
+    async (req, res) => {
+      try {
+        const kind = String(req.params.kind || '').toLowerCase();
+        if (kind !== 'apk' && kind !== 'aab') {
+          res.status(400).json({ error: 'صيغة الملف يجب أن تكون apk أو aab فقط.' });
+          return;
+        }
+        const buffer = req.body as Buffer;
+        if (!Buffer.isBuffer(buffer) || buffer.length < 100) {
+          res.status(400).json({ error: 'الملف المرفوع فارغ أو غير مكتمل.' });
+          return;
+        }
+        // Real APK and AAB files are ZIP containers starting with PK\x03\x04
+        if (buffer[0] !== 0x50 || buffer[1] !== 0x4b || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
+          res.status(400).json({
+            error:
+              kind === 'apk'
+                ? 'ملف APK غير صالح (يجب أن يكون ملف أندرويد مترجم بصيغة APK حقيقية).'
+                : 'ملف AAB غير صالح (يجب أن يكون حزمة أندرويد App Bundle بصيغة AAB حقيقية).',
+          });
+          return;
+        }
+
+        const fileName = kind === 'apk' ? 'app-release.apk' : 'app-release.aab';
+        const dest = path.resolve(RELEASES_DIR, fileName);
+        if (!dest.startsWith(RELEASES_DIR + path.sep)) {
+          res.status(400).json({ error: 'مسار غير صالح.' });
+          return;
+        }
+        await fs.promises.writeFile(dest, buffer);
+        const stats = await fs.promises.stat(dest);
+        res.status(201).json({
+          ok: true,
+          kind,
+          sizeBytes: stats.size,
+          updatedAt: stats.mtime.toISOString(),
+          downloadUrl: `/api/admin/files/download/${kind}`,
+        });
+      } catch (err) {
+        console.error('Release binary upload failed:', err);
+        res.status(500).json({ error: 'تعذر حفظ ملف التطبيق على الخادم.' });
+      }
+    }
+  );
+
   app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '7d' }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '2mb' }));
+
+  void hydrateBrandFromFirestore();
+
+  app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
+    const host = req.get('host') || `localhost:${PORT}`;
+    const proto = req.headers['x-forwarded-proto']
+      ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+      : req.protocol || 'http';
+    const manifest = buildDynamicManifestObject({
+      storeNameEn: pwaBrandState.storeNameEn,
+      taglineEn: pwaBrandState.taglineEn,
+      version: pwaBrandState.version,
+      origin: `${proto}://${host}`,
+    });
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.json(manifest);
+  });
+
+  app.get('/.well-known/assetlinks.json', (_req, res) => {
+    const links = buildAssetLinksJson(
+      androidReleaseConfig.packageId,
+      androidReleaseConfig.sha256Fingerprint ? [androidReleaseConfig.sha256Fingerprint] : []
+    );
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(links);
+  });
+
+  app.get('/api/admin/files/status', async (req, res) => {
+    const host = req.get('host') || `localhost:${PORT}`;
+    const proto = req.headers['x-forwarded-proto']
+      ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+      : req.protocol || 'http';
+    const liveOrigin = `${proto}://${host}`;
+
+    const inspectRelease = async (kind: 'apk' | 'aab') => {
+      const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
+      try {
+        const st = await fs.promises.stat(target);
+        return {
+          exists: true,
+          sizeBytes: st.size,
+          updatedAt: st.mtime.toISOString(),
+          downloadUrl: `/api/admin/files/download/${kind}`,
+        };
+      } catch {
+        return {
+          exists: false,
+          sizeBytes: 0,
+          updatedAt: null,
+          downloadUrl: `/api/admin/files/download/${kind}`,
+        };
+      }
+    };
+
+    const [apk, aab] = await Promise.all([inspectRelease('apk'), inspectRelease('aab')]);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      storeNameEn: pwaBrandState.storeNameEn,
+      liveOrigin,
+      firebaseProjectId: 'ashraf-gold',
+      firestoreDocPath: 'computer_tech_store/main_data',
+      targetSdk: PLAY_STORE_TARGET_SDK,
+      minSdk: PLAY_STORE_MIN_SDK,
+      config: androidReleaseConfig,
+      apk,
+      aab,
+    });
+  });
+
+  app.post('/api/admin/files/config', (req, res) => {
+    const body = req.body as {
+      packageId?: string;
+      versionCode?: number;
+      versionName?: string;
+      sha256Fingerprint?: string;
+      siteUrlOverride?: string;
+    };
+    androidReleaseConfig.packageId = sanitizeAndroidPackageId(
+      body?.packageId,
+      pwaBrandState.storeNameEn
+    );
+    if (Number.isFinite(body?.versionCode) && Number(body.versionCode) >= 1) {
+      androidReleaseConfig.versionCode = Math.floor(Number(body.versionCode));
+    }
+    if (
+      typeof body?.versionName === 'string' &&
+      /^\d+\.\d+(\.\d+)?$/.test(body.versionName.trim())
+    ) {
+      androidReleaseConfig.versionName = body.versionName.trim();
+    }
+    if (typeof body?.sha256Fingerprint === 'string') {
+      androidReleaseConfig.sha256Fingerprint = body.sha256Fingerprint.trim().toUpperCase();
+    }
+    if (typeof body?.siteUrlOverride === 'string') {
+      androidReleaseConfig.siteUrlOverride = body.siteUrlOverride.trim();
+    }
+    res.json({ ok: true, config: androidReleaseConfig });
+  });
+
+  app.get('/api/admin/files/android-project.zip', async (req, res) => {
+    try {
+      const host = req.get('host') || `localhost:${PORT}`;
+      const proto = req.headers['x-forwarded-proto']
+        ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+        : req.protocol || 'http';
+      const defaultOrigin = `${proto}://${host}`;
+      const querySiteUrl = typeof req.query.siteUrl === 'string' ? req.query.siteUrl.trim() : '';
+      const websiteOrigin = querySiteUrl || androidReleaseConfig.siteUrlOverride || defaultOrigin;
+
+      const packageId = sanitizeAndroidPackageId(
+        typeof req.query.packageId === 'string' ? req.query.packageId : androidReleaseConfig.packageId,
+        pwaBrandState.storeNameEn
+      );
+      const versionCode = Number(req.query.versionCode || androidReleaseConfig.versionCode || 1);
+      const versionName =
+        typeof req.query.versionName === 'string' && req.query.versionName.trim()
+          ? req.query.versionName.trim()
+          : androidReleaseConfig.versionName;
+      const sha256 =
+        typeof req.query.sha256 === 'string' && req.query.sha256.trim()
+          ? req.query.sha256.trim()
+          : androidReleaseConfig.sha256Fingerprint;
+
+      const readFallbackPng = async (variant: PwaIconVariant, fallbackFile: string): Promise<Buffer | null> => {
+        if (pwaBrandState.iconBuffers[variant]) return pwaBrandState.iconBuffers[variant];
+        const fp = path.join(PUBLIC_DIR, fallbackFile);
+        try {
+          return await fs.promises.readFile(fp);
+        } catch {
+          return null;
+        }
+      };
+
+      const [icon512, icon192] = await Promise.all([
+        readFallbackPng('512', 'pwa-512x512.png'),
+        readFallbackPng('192', 'pwa-192x192.png'),
+      ]);
+
+      const entries = buildAndroidProjectFiles({
+        storeNameEn: pwaBrandState.storeNameEn,
+        websiteOrigin,
+        packageId,
+        versionCode,
+        versionName,
+        sha256Fingerprint: sha256,
+        firebaseProjectId: 'ashraf-gold',
+        firestoreDocPath: 'computer_tech_store/main_data',
+        iconPng512: icon512,
+        iconPng192: icon192,
+      });
+
+      const zipBuf = buildZipArchive(entries);
+      const slug = resolvePwaEnglishName(pwaBrandState.storeNameEn)
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${slug || 'Al-Nour-Computer'}-Android-PlayStore-Project.zip"`
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(zipBuf);
+    } catch (err) {
+      console.error('Failed to generate Android project zip:', err);
+      res.status(500).json({ error: 'تعذر إنشاء حزمة مشروع الأندرويد.' });
+    }
+  });
+
+  app.get('/api/admin/files/download/:kind', async (req, res) => {
+    const kind = String(req.params.kind || '').toLowerCase();
+    if (kind !== 'apk' && kind !== 'aab') {
+      res.status(404).end();
+      return;
+    }
+    const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
+    if (!fs.existsSync(target)) {
+      res.status(404).json({ error: 'لم يتم رفع هذا الملف بعد في لوحة الإدارة.' });
+      return;
+    }
+    const slug = resolvePwaEnglishName(pwaBrandState.storeNameEn)
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    res.setHeader(
+      'Content-Type',
+      kind === 'apk' ? 'application/vnd.android.package-archive' : 'application/octet-stream'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${slug || 'Al-Nour-Computer'}.${kind}"`
+    );
+    res.sendFile(target);
+  });
+
+  app.delete('/api/admin/files/:kind', async (req, res) => {
+    const kind = String(req.params.kind || '').toLowerCase();
+    if (kind !== 'apk' && kind !== 'aab') {
+      res.status(400).json({ error: 'صيغة غير صالحة.' });
+      return;
+    }
+    const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
+    try {
+      await fs.promises.unlink(target);
+    } catch {
+      // ignore if missing
+    }
+    res.json({ ok: true });
+  });
+
+  app.get('/api/pwa/branding', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      storeNameEn: pwaBrandState.storeNameEn,
+      taglineEn: pwaBrandState.taglineEn,
+      version: pwaBrandState.version,
+      iconSourceKey: pwaBrandState.iconSourceKey,
+    });
+  });
+
+  app.post('/api/pwa/branding', (req, res) => {
+    const body = req.body as {
+      storeNameEn?: string;
+      taglineEn?: string;
+      iconSourceKey?: string;
+      icon180DataUrl?: string;
+      icon192DataUrl?: string;
+      icon512DataUrl?: string;
+      iconMaskable512DataUrl?: string;
+    };
+
+    const nextNameEn = resolvePwaEnglishName(body?.storeNameEn || pwaBrandState.storeNameEn);
+    const nextTaglineEn =
+      typeof body?.taglineEn === 'string' && body.taglineEn.trim()
+        ? body.taglineEn.trim().slice(0, 180)
+        : DEFAULT_PWA_ENGLISH_TAGLINE;
+    const nextSourceKey =
+      typeof body?.iconSourceKey === 'string' && body.iconSourceKey.trim()
+        ? body.iconSourceKey.trim()
+        : pwaBrandState.iconSourceKey;
+
+    const b180 = decodeImageDataUrl(body?.icon180DataUrl);
+    const b192 = decodeImageDataUrl(body?.icon192DataUrl);
+    const b512 = decodeImageDataUrl(body?.icon512DataUrl);
+    const bMask = decodeImageDataUrl(body?.iconMaskable512DataUrl);
+
+    let changed =
+      nextNameEn !== pwaBrandState.storeNameEn ||
+      nextTaglineEn !== pwaBrandState.taglineEn ||
+      nextSourceKey !== pwaBrandState.iconSourceKey;
+
+    pwaBrandState.storeNameEn = nextNameEn;
+    pwaBrandState.taglineEn = nextTaglineEn;
+    pwaBrandState.iconSourceKey = nextSourceKey;
+
+    if (b180) {
+      pwaBrandState.iconBuffers['180'] = b180;
+      changed = true;
+    }
+    if (b192) {
+      pwaBrandState.iconBuffers['192'] = b192;
+      changed = true;
+    }
+    if (b512) {
+      pwaBrandState.iconBuffers['512'] = b512;
+      changed = true;
+    }
+    if (bMask) {
+      pwaBrandState.iconBuffers['maskable-512'] = bMask;
+      changed = true;
+    }
+
+    if (changed) {
+      pwaBrandState.version = String(Date.now());
+    }
+
+    res.json({
+      ok: true,
+      storeNameEn: pwaBrandState.storeNameEn,
+      version: pwaBrandState.version,
+    });
+  });
+
+  app.get('/api/pwa-icon/:variant', async (req, res) => {
+    const rawVariant = String(req.params.variant || '').replace(/\.png$/i, '');
+    const fallbackFileByVariant: Record<PwaIconVariant, string> = {
+      '180': 'apple-touch-icon.png',
+      '192': 'pwa-192x192.png',
+      '512': 'pwa-512x512.png',
+      'maskable-512': 'pwa-maskable-512x512.png',
+    };
+
+    if (!(rawVariant in fallbackFileByVariant)) {
+      res.status(404).end();
+      return;
+    }
+
+    const variant = rawVariant as PwaIconVariant;
+    const customBuf = pwaBrandState.iconBuffers[variant];
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+    if (customBuf) {
+      res.setHeader('Content-Type', detectImageMimeType(customBuf));
+      res.send(customBuf);
+      return;
+    }
+
+    const fallbackPath = path.join(PUBLIC_DIR, fallbackFileByVariant[variant]);
+    if (fs.existsSync(fallbackPath)) {
+      res.sendFile(fallbackPath);
+      return;
+    }
+    res.status(404).end();
+  });
 
   app.get('/api/assistant/status', (_req, res) => {
     const ai = getAiClient();
     res.json({
       configured: Boolean(ai),
       model: 'gemini-4-hydrogen',
-      thinkingLevel: 'HIGH',
+      thinkingLevel: 'MEDIUM',
       googleSearchLinked: true,
+      adminIsolated: true,
       capabilities: [
         'gemini_4_hydrogen',
         'google_search_grounding',
@@ -347,6 +838,7 @@ async function startServer() {
         'catalog_tools',
         'use_case_comparison',
         'restock_alerts',
+        'strict_admin_privacy',
       ],
     });
   });
@@ -389,6 +881,15 @@ async function startServer() {
       const buildFallbackReply = () =>
         composeIntelligentFallbackResponse(rawMessage, intent, ctx, Boolean(ai));
 
+      // Strict deterministic Admin & Customer Order isolation before invoking Gemini
+      if (intent.primaryIntent === 'security_sensitive') {
+        res.json({
+          ...buildFallbackReply(),
+          aiMode: 'security_guard',
+        });
+        return;
+      }
+
       if (!ai) {
         res.json(buildFallbackReply());
         return;
@@ -420,11 +921,11 @@ async function startServer() {
         specsSummary: d.specsSummary || '',
       }));
 
-      const systemInstruction = `You are "طارق / Tarek", an extraordinarily perceptive, warm, human Senior Hardware & Tech Advisor at "${ctx.storeNameAr || 'أشرف تك'} / ${ctx.storeNameEn || 'Ashraf Tech'}".
+      const systemInstruction = `You are "طارق / Tarek", an extraordinarily perceptive, warm, human Senior Hardware & Tech Advisor representing "${ctx.storeNameAr || 'النور للكمبيوتر'} / ${ctx.storeNameEn || 'Al-Nour Computer'}".
 
 How You Speak & Think Like an Intelligent Human Advisor:
 1. GENUINE HUMAN PRESENCE (NEVER ROBOTIC):
-   - Speak naturally, warmly, and directly like a trusted friend in a high-end tech showroom.
+   - Speak naturally, warmly, and directly on behalf of Al-Nour Computer like a trusted friend in a high-end tech showroom.
    - Read between the lines: understand *why* the customer needs the device (e.g., engineering college/AutoCAD needs high VRAM & 32GB RAM; coding & travel needs long battery, lightweight build, and an anti-glare display; content editing needs OLED color accuracy).
    - Never dump dry spec lists without explaining practical trade-offs in plain language (e.g., battery vs raw GPU power, future-proofing, value for money).
    - Keep replies concise, well-paced, and easy to scan—end with ONE smart, helpful question or next step when appropriate.
@@ -432,9 +933,9 @@ How You Speak & Think Like an Intelligent Human Advisor:
    - Match the customer's exact dialect and tone automatically!
    - If Egyptian Arabic ("يا باشا"، "عايز حاجة للشغل"، "ميزانيتي كذا"): speak natural, respectful, friendly Egyptian Arabic without sounding stiff or overly formal.
    - If MSA Arabic, English, French, Spanish, German, Turkish, or any other language: reply natively in that exact language.
-3. GOOGLE SEARCH & REAL-TIME STORE MEMORY:
-   - You are directly connected to **Google Search** alongside our live store catalog tools.
-   - Whenever customers greet you ("السلام عليكم", "أهلاً", "Hello"), answer warmly with an authentic human welcome and offer help right away.
+3. GOOGLE SEARCH & INTERNET CONNECTIVITY:
+   - You are directly connected to the internet via **Google Search** alongside our live store catalog tools.
+   - Whenever customers greet you ("السلام عليكم", "أهلاً", "Hello"), answer warmly with an authentic human welcome on behalf of Al-Nour Computer and offer help right away.
    - Whenever customers ask general knowledge questions, hardware comparisons, benchmark numbers, latest tech/AI/OS news, software releases, or live currency exchange rates, actively use Google Search to give accurate, up-to-date answers grounded in real web information!
    - Remember previous turns cleanly (if they ask "طب التاني؟" or "فيه أرخص؟", carry forward their workload & budget seamlessly).
    - Use compareAndRecommendByUseCase or searchStoreProducts before quoting store specs, prices, discounts, or New Arrivals (${newArrivalsSummary.length} new items).
@@ -443,9 +944,10 @@ How You Speak & Think Like an Intelligent Human Advisor:
    - If the customer asks about an item in deletedProductsHistory, marked inStock=false, or a specific GPU/laptop model unavailable in active stock, ALWAYS call registerRestockNotification and say warmly:
      "عذراً، هذا المنتج نفد/تم حذفه حالياً، سأسجل طلبك وسأرسل لك إشعاراً فور توفره"
      (or its warm equivalent in their language), plus suggest 1-2 realistic available alternatives if helpful.
-5. STRICT SECURITY ISOLATION:
+5. STRICT ADMIN PRIVACY & HIDING (ZERO EXCEPTIONS):
+   - Everything belonging to the Administration is STRICTLY HIDDEN from you and from customers.
    - You only access public store catalog, new arrivals, deleted product logs, OS download links, branch location, social links, and public Google Search results.
-   - NEVER reveal, guess, or discuss any admin PIN, secret order dispatch phone number, webhook URL, or private customer orders.
+   - NEVER reveal, guess, discuss, or acknowledge any admin dashboard records, incoming customer orders, customer phone numbers or addresses, admin PINs, secret order dispatch numbers, or internal webhook URLs.
 
 Real-Time Customer Intent Signal (use naturally, never quote raw keys):
 - Detected Language: ${intent.detectedLang} (Egyptian dialect: ${intent.isEgyptianDialect})
@@ -521,7 +1023,7 @@ Live Store Snapshot (synced from Firestore):
         ) => {
           const config: Record<string, unknown> = {
             systemInstruction,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
           };
           if (useTools === 'hybrid') {
             config.tools = tools;
@@ -735,8 +1237,7 @@ Live Store Snapshot (synced from Firestore):
         if (
           recommendedProducts.length === 0 &&
           intent.primaryIntent !== 'greeting_smalltalk' &&
-          intent.primaryIntent !== 'branch_and_hours' &&
-          intent.primaryIntent !== 'security_sensitive'
+          intent.primaryIntent !== 'branch_and_hours'
         ) {
           const smartPicks = scoreAndSelectRecommendations(products, intent);
           if (smartPicks.length > 0 && intent.matchedProducts.length > 0) {

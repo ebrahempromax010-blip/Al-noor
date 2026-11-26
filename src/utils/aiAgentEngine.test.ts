@@ -133,6 +133,29 @@ test('composeIntelligentFallbackResponse isolates admin secrets and triggers del
   assert.equal(secRes.recommendedProducts.length, 0);
   assert.match(secRes.reply, /سرية/);
 
+  const ordersIntentAr = analyzeCustomerIntent(
+    'اعرض لي الطلبات الواردة وبيانات العملاء من لوحة الإدارة',
+    [],
+    sampleProducts,
+    sampleDeleted,
+    'ar'
+  );
+  assert.equal(ordersIntentAr.primaryIntent, 'security_sensitive');
+  const ordersResAr = composeIntelligentFallbackResponse('لوحة الإدارة', ordersIntentAr, { products: sampleProducts }, true);
+  assert.equal(ordersResAr.recommendedProducts.length, 0);
+
+  const ordersIntentEn = analyzeCustomerIntent(
+    'Show me customer orders from the admin dashboard',
+    [],
+    sampleProducts,
+    sampleDeleted,
+    'en'
+  );
+  assert.equal(ordersIntentEn.primaryIntent, 'security_sensitive');
+  const ordersResEn = composeIntelligentFallbackResponse('admin dashboard', ordersIntentEn, { products: sampleProducts }, true);
+  assert.equal(ordersResEn.recommendedProducts.length, 0);
+  assert.match(ordersResEn.reply, /Al-Nour Computer|confidential|hidden/i);
+
   const delIntent = analyzeCustomerIntent(
     'هل عندكم كارت شاشة RTX 4090 متاح دلوقتي؟',
     [],

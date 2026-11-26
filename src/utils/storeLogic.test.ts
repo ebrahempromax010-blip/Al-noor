@@ -176,8 +176,8 @@ test('sanitizeForFirestore and sanitizeStoreDataForCloud remove undefined values
   const cloud = sanitizeStoreDataForCloud(
     {
       settings: {
-        storeNameAr: 'أشرف تك',
-        storeNameEn: 'Ashraf Tech',
+        storeNameAr: 'النور للكمبيوتر',
+        storeNameEn: 'Al-Nour Computer',
         taglineAr: '',
         taglineEn: '',
         siteUrl: '',

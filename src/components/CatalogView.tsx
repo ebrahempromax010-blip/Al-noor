@@ -8,11 +8,14 @@ import {
   Product,
 } from '../types/store';
 import { filterAndSortTechProducts } from '../utils/storeLogic';
+import { CurrencyCode } from '../utils/currencyLogic';
 import { ProductCard } from './ProductCard';
 
 interface CatalogViewProps {
   lang: Language;
   currency: string;
+  displayCurrency?: CurrencyCode;
+  exchangeRates?: Record<CurrencyCode, number>;
   layoutStyle: LayoutStyle;
   products: Product[];
   categoryTab: CatalogCategoryTab;
@@ -28,6 +31,8 @@ interface CatalogViewProps {
 export const CatalogView: React.FC<CatalogViewProps> = memo(({
   lang,
   currency,
+  displayCurrency,
+  exchangeRates,
   layoutStyle,
   products,
   categoryTab,
@@ -158,6 +163,8 @@ export const CatalogView: React.FC<CatalogViewProps> = memo(({
               product={product}
               lang={lang}
               currency={currency}
+              displayCurrency={displayCurrency}
+              exchangeRates={exchangeRates}
               layoutStyle={layoutStyle}
               onAddToCart={onAddToCart}
               onZoom={onZoomProduct}

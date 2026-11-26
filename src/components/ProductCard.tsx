@@ -2,11 +2,19 @@ import React, { memo, useState } from 'react';
 import { Expand, PlayCircle, ShoppingCart, Video } from 'lucide-react';
 import { Language, LayoutStyle, Product } from '../types/store';
 import { calculateDiscountedPrice, getCategoryGroupLabel } from '../utils/storeLogic';
+import {
+  buildRelativeRateTable,
+  CurrencyCode,
+  formatStorePriceDisplay,
+  resolveBaseCurrencyCode,
+} from '../utils/currencyLogic';
 
 interface ProductCardProps {
   product: Product;
   lang: Language;
   currency: string;
+  displayCurrency?: CurrencyCode;
+  exchangeRates?: Record<CurrencyCode, number>;
   layoutStyle?: LayoutStyle;
   onAddToCart: (product: Product) => void;
   onZoom: (product: Product) => void;
@@ -16,6 +24,8 @@ export const ProductCard: React.FC<ProductCardProps> = memo(({
   product,
   lang,
   currency,
+  displayCurrency,
+  exchangeRates,
   layoutStyle = 'modern_grid',
   onAddToCart,
   onZoom,
@@ -27,6 +37,22 @@ export const ProductCard: React.FC<ProductCardProps> = memo(({
   const finalPrice = calculateDiscountedPrice(product.price, product.discountPercent);
   const hasDiscount = (product.discountPercent || 0) > 0;
   const hasVideo = Boolean(product.videoUrl && product.videoUrl.trim());
+  const baseCode = resolveBaseCurrencyCode(currency);
+  const ratesTable = exchangeRates || buildRelativeRateTable(baseCode, null);
+  const formattedFinal = formatStorePriceDisplay(
+    finalPrice,
+    currency,
+    displayCurrency || baseCode,
+    ratesTable,
+    lang
+  );
+  const formattedOriginal = formatStorePriceDisplay(
+    product.price,
+    currency,
+    displayCurrency || baseCode,
+    ratesTable,
+    lang
+  );
 
   const isWide = layoutStyle === 'executive_wide';
 
@@ -124,14 +150,17 @@ export const ProductCard: React.FC<ProductCardProps> = memo(({
         <div className="mt-4 flex items-end justify-between gap-2 border-t border-inherit pt-3">
           <div>
             <div className="flex items-baseline gap-1.5">
-              <span className="font-mono-tabular text-base sm:text-lg font-extrabold text-blue-600 dark:text-sky-400">
-                {finalPrice.toLocaleString('en-US')}
+              <span
+                data-testid={`product-price-${product.id}`}
+                className="font-mono-tabular text-base sm:text-lg font-extrabold text-blue-600 dark:text-sky-400"
+              >
+                {formattedFinal.formattedNumber}
               </span>
-              <span className="text-xs font-bold">{currency}</span>
+              <span className="text-xs font-bold">{formattedFinal.currencyUnit}</span>
             </div>
             {hasDiscount && (
               <span className="tech-text-secondary font-mono-tabular text-xs line-through">
-                {product.price.toLocaleString('en-US')} {currency}
+                {formattedOriginal.formattedNumber} {formattedOriginal.currencyUnit}
               </span>
             )}
           </div>

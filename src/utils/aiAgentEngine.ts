@@ -398,7 +398,7 @@ export function analyzeCustomerIntent(
   const isEgyptianDialect = detectEgyptianDialect(combinedHistoryText);
 
   const asksSecret =
-    /\b(adminpin|secretordersphone|orderwebhookurl|webhook|pin|password)\b|رمز الأدمن|كلمة سر|رقم الطلبات السري|رقم الأوردرات|الرقم السري/i.test(
+    /\b(adminpin|secretordersphone|orderwebhookurl|webhook|pin|password|admin\s*panel|admin\s*dashboard|customer\s*orders?|customer\s*list|customer\s*phones?|customer\s*addresses?)\b|رمز الأدمن|كلمة سر|رقم الطلبات السري|رقم الأوردرات|الرقم السري|لوحة الإدارة|إدارة المتجر|الطلبات الواردة|طلبات العملاء|بيانات العملاء|أرقام العملاء|عناوين العملاء|حسابات الإدارة/i.test(
       rawMessage
     );
 
@@ -634,15 +634,15 @@ export function composeIntelligentFallbackResponse(
   const lang = intent.detectedLang;
   const currency = ctx.currency || (lang === 'ar' ? 'ج.م' : 'EGP');
   const storeName =
-    lang === 'ar' ? ctx.storeNameAr || 'أشرف تك' : ctx.storeNameEn || 'Ashraf Tech';
+    lang === 'ar' ? ctx.storeNameAr || 'النور للكمبيوتر' : ctx.storeNameEn || 'Al-Nour Computer';
   const products = Array.isArray(ctx.products) ? ctx.products : [];
 
   if (intent.primaryIntent === 'security_sensitive') {
     return {
       reply:
         lang === 'ar'
-          ? 'أهلاً بك يا فندم! بيانات الإدارة وأرقام التواصل الداخلية سرية ولا يمكنني مشاركتها، لكن أنا هنا تحت أمرك لو حابب تقارن مواصفات جهاز معين أو تسأل عن الأسعار والعروض المتاحة.'
-          : 'Welcome! Internal admin credentials and private numbers are strictly confidential, but I am happy to help you compare hardware specs, check prices, or explore our current offers.',
+          ? 'أهلاً بك يا فندم! جميع بيانات لوحة الإدارة، الطلبات الواردة، وبيانات العملاء والأرقام الداخلية محجوبة وسرية تماماً ولا يمكنني الوصول إليها أو مشاركتها، لكن يسعدني جداً مساعدتك في مقارنة الأجهزة أو الاستفسار عن الأسعار والمواصفات.'
+          : 'Welcome! All admin dashboard data, incoming orders, customer details, and private credentials are strictly hidden and confidential. I am happy to help you compare hardware specs, check prices, or explore our available offers.',
       unavailableRequested: false,
       watchQuery: null,
       matchedDeletedProductId: null,

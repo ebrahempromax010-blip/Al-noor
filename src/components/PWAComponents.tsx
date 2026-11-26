@@ -22,6 +22,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   isInstalled,
   onClick,
 }) => {
+  if (isInstalled) {
+    return null;
+  }
+
   return (
     <button
       type="button"
@@ -31,9 +35,6 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     >
       <Download className="h-4 w-4 shrink-0" />
       <span>{lang === 'ar' ? 'تثبيت التطبيق' : 'Install App'}</span>
-      {isInstalled && (
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300 shrink-0" aria-hidden="true" />
-      )}
     </button>
   );
 };

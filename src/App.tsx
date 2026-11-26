@@ -24,6 +24,7 @@ import {
   isDesktopDevice,
   sanitizeStoreDataForCloud,
 } from './utils/storeLogic';
+import { syncDynamicPwaBranding } from './utils/pwaBrandingSync';
 import { Header } from './components/Header';
 import { InstallGuideModal, OfflineBanner } from './components/PWAComponents';
 import {
@@ -75,7 +76,7 @@ export default function App() {
     {
       id: 'welcome-ai',
       role: 'assistant',
-      text: 'أهلاً بك يا فندم في أشرف تك! معاك مستشارك الذكي.\nاحكيلي بتدور على جهاز لإيه (ألعاب، هندسة ومونتاج، برمجة وشغل، أو إكسسوارات) وميزانيتك التقريبية كام، وهقارنلك الأنسب وأرشحلك أفضل اختيار بأسلوب واضح وبسيط.',
+      text: 'أهلاً بك يا فندم في النور للكمبيوتر (Al-Nour Computer)! معاك مستشارك الذكي.\nاحكيلي بتدور على جهاز لإيه (ألعاب، هندسة ومونتاج، برمجة وشغل، أو إكسسوارات) وميزانيتك التقريبية كام، وهقارنلك الأنسب وأرشحلك أفضل اختيار بأسلوب واضح وبسيط.',
       createdAt: new Date().toISOString(),
     },
   ]);
@@ -150,6 +151,22 @@ export default function App() {
   useEffect(() => {
     document.title = `${identity.storeName} — ${identity.tagline}`;
   }, [identity.storeName, identity.tagline]);
+
+  // Sync dynamic PWA English launcher name & icon to Express manifest/icons endpoints & DOM
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void syncDynamicPwaBranding({
+        storeNameEn: storeData.settings.storeNameEn,
+        taglineEn: storeData.settings.taglineEn,
+        storeIconUrl: storeData.settings.storeIconUrl,
+      });
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [
+    storeData.settings.storeNameEn,
+    storeData.settings.taglineEn,
+    storeData.settings.storeIconUrl,
+  ]);
 
   // Live Firebase Cloud Firestore real-time synchronization (cleaned up cleanly on unmount)
   useEffect(() => {

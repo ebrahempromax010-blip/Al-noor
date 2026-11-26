@@ -1,32 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  CheckCircle2,
   Cloud,
   Download,
   ExternalLink,
-  FileArchive,
   FolderArchive,
+  Loader2,
   PackageCheck,
   RefreshCw,
   ShieldCheck,
   Smartphone,
-  Trash2,
-  Upload,
 } from 'lucide-react';
 import { Language, StoreData } from '../types/store';
 import { resolvePwaEnglishName } from '../utils/pwaLogic';
 import { sanitizeAndroidPackageId } from '../utils/androidProjectGenerator';
 
-interface ReleaseBinaryInfo {
-  exists: boolean;
-  sizeBytes: number;
-  updatedAt: string | null;
-  downloadUrl: string;
-}
-
 interface FilesStatusResponse {
   storeNameEn: string;
+  iconVersion: string;
   liveOrigin: string;
+  cloudApkEligible: boolean;
   firebaseProjectId: string;
   firestoreDocPath: string;
   targetSdk: number;
@@ -38,8 +30,6 @@ interface FilesStatusResponse {
     sha256Fingerprint: string;
     siteUrlOverride: string;
   };
-  apk: ReleaseBinaryInfo;
-  aab: ReleaseBinaryInfo;
 }
 
 interface AdminFilesPanelProps {
@@ -47,16 +37,27 @@ interface AdminFilesPanelProps {
   storeData: StoreData;
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 KB';
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function extractFilenameFromDisposition(header: string | null, fallbackName: string): string {
+  if (!header) return fallbackName;
+  const match = header.match(/filename="?([^";\n]+)"?/i);
+  return match?.[1]?.trim() || fallbackName;
 }
 
 export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeData }) => {
   const [status, setStatus] = useState<FilesStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [uploadingKind, setUploadingKind] = useState<'apk' | 'aab' | null>(null);
+  const [downloadingKind, setDownloadingKind] = useState<'apk' | 'aab' | 'aab-kit' | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
   const [notice, setNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -94,6 +95,11 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
     void fetchStatus();
   }, [fetchStatus]);
 
+  const activeOrigin =
+    (typeof window !== 'undefined' ? window.location.origin : '') ||
+    status?.liveOrigin ||
+    storeData.settings.siteUrl;
+
   const handleSaveBuildConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingConfig(true);
@@ -108,16 +114,15 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
           versionCode: Number(versionCode) || 1,
           versionName,
           sha256Fingerprint: sha256,
-          siteUrlOverride:
-            typeof window !== 'undefined' ? window.location.origin : storeData.settings.siteUrl,
+          siteUrlOverride: activeOrigin,
         }),
       });
       if (!res.ok) throw new Error('Save failed');
       await fetchStatus();
       setNotice(
         lang === 'ar'
-          ? 'تم حفظ وتحديث إعدادات حزمة الأندرويد وربطها بالمتجر وFirestore.'
-          : 'Android build configuration saved & linked to live store + Firestore.'
+          ? 'تم حفظ إعدادات الحزمة وربطها بالمتجر وFirestore وmanifest.json وsw.js بنجاح.'
+          : 'Release configuration saved & synced with live Store, Firestore, manifest.json & sw.js.'
       );
     } catch {
       setErrorMsg(
@@ -130,61 +135,69 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
     }
   };
 
-  const handleUploadReleaseBinary = async (kind: 'apk' | 'aab', file?: File) => {
-    if (!file) return;
-    setUploadingKind(kind);
+  const handleGenerateAndDownload = async (
+    kind: 'apk' | 'aab',
+    opts?: { includeKit?: boolean; forceSource?: boolean }
+  ) => {
+    const busyKey = opts?.includeKit ? 'aab-kit' : kind;
+    setDownloadingKind(busyKey);
     setErrorMsg('');
     setNotice('');
     try {
-      const buf = await file.arrayBuffer();
-      const res = await fetch(`/api/admin/files/upload/${kind}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: buf,
+      const params = new URLSearchParams({
+        packageId,
+        versionCode: String(Number(versionCode) || 1),
+        versionName: versionName || '1.0.0',
+        siteUrl: activeOrigin,
+        sha256,
       });
-      const json = (await res.json()) as { error?: string };
+      if (opts?.includeKit) params.set('includeKit', '1');
+      if (opts?.forceSource) params.set('mode', 'source');
+
+      const res = await fetch(`/api/admin/files/generate/${kind}?${params.toString()}`);
       if (!res.ok) {
-        throw new Error(json.error || 'Upload error');
+        const errData = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errData.error || 'Package generation failed');
       }
-      await fetchStatus();
-      setNotice(
-        lang === 'ar'
-          ? `تم تخزين ملف ${kind.toUpperCase()} بنجاح وأصبح جاهزاً للتحميل المباشر.`
-          : `${kind.toUpperCase()} package stored cleanly and ready for download.`
+
+      const source = res.headers.get('X-Build-Source') || 'local-twa-bundle';
+      const fallbackFilename =
+        source === 'pwabuilder-cloudapk' && !opts?.includeKit
+          ? `${englishAppName.replace(/[^a-zA-Z0-9]+/g, '-')}.${kind}`
+          : `${englishAppName.replace(/[^a-zA-Z0-9]+/g, '-')}-${
+              kind === 'apk' ? 'Android-APK-Package' : 'GooglePlay-AAB-Package'
+            }.zip`;
+      const filename = extractFilenameFromDisposition(
+        res.headers.get('Content-Disposition'),
+        fallbackFilename
       );
+
+      const blob = await res.blob();
+      triggerBlobDownload(blob, filename);
+
+      if (source === 'pwabuilder-cloudapk') {
+        setNotice(
+          lang === 'ar'
+            ? `تم توليد وتنزيل "${filename}" الموقّع عبر PWABuilder API المرتبط بـ ${activeOrigin} بنجاح!`
+            : `Generated and downloaded signed "${filename}" via PWABuilder API linked to ${activeOrigin}!`
+        );
+      } else {
+        setNotice(
+          lang === 'ar'
+            ? `تم توليد وتنزيل حزمة "${filename}" المربوطة بـ ${activeOrigin} وFirestore (جاهزة للتوقيع والبناء بـ Target SDK 35).`
+            : `Generated and downloaded "${filename}" synced with ${activeOrigin} & Firestore (Target SDK 35 ready).`
+        );
+      }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Upload failed');
+      setErrorMsg(err instanceof Error ? err.message : 'Download failed');
     } finally {
-      setUploadingKind(null);
+      setDownloadingKind(null);
     }
   };
 
-  const handleDeleteReleaseBinary = async (kind: 'apk' | 'aab') => {
-    setErrorMsg('');
-    setNotice('');
-    await fetch(`/api/admin/files/${kind}`, { method: 'DELETE' });
-    await fetchStatus();
-    setNotice(
-      lang === 'ar'
-        ? `تم حذف ملف ${kind.toUpperCase()} المخزن.`
-        : `Removed stored ${kind.toUpperCase()} file.`
-    );
-  };
-
-  const activeOrigin =
-    (typeof window !== 'undefined' ? window.location.origin : '') ||
-    status?.liveOrigin ||
-    storeData.settings.siteUrl;
-
-  const projectZipUrl = `/api/admin/files/android-project.zip?packageId=${encodeURIComponent(
-    packageId
-  )}&versionCode=${encodeURIComponent(versionCode)}&versionName=${encodeURIComponent(
-    versionName
-  )}&siteUrl=${encodeURIComponent(activeOrigin)}&sha256=${encodeURIComponent(sha256)}`;
-
   return (
     <div className="space-y-5" data-testid="admin-files-panel">
-      {/* Header + Live Website & Firestore Sync Summary */}
+      {/* Header + Live Dynamic Manifest / SW / Firestore Status */}
       <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -192,14 +205,14 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
               <FolderArchive className="h-5 w-5 text-blue-500" />
               <span>
                 {lang === 'ar'
-                  ? 'قسم الملفات — حزم الأندرويد (APK) ومتجر جوجل بلاي (AAB / App Bundle)'
-                  : 'Files — Mobile APK & Google Play AAB Packages'}
+                  ? 'قسم ملفات التطبيق الجاهزة (APK & AAB) — للمدير فقط'
+                  : 'Ready App Packages (APK & AAB) — Admin Only'}
               </span>
             </h3>
             <p className="tech-text-secondary text-xs mt-1">
               {lang === 'ar'
-                ? 'مرتبط لحظياً بالموقع الرئيسي وبيانات Firebase Firestore ومزامن مع الاسم الإنجليزي والأيقونة الحالية.'
-                : 'Dynamically synced with the live website URL, Firebase Firestore document, English launcher name, and Store icon.'}
+                ? 'توليد وتنزيل فوري بضغطة زر مع ربط تلقائي باسم المتجر الإنجليزي، الأيقونة، الرابط الفعلي الحالي، وFirestore.'
+                : 'One-click ready export dynamically synced with English store name, icon, live window.location.origin, and Firestore.'}
             </p>
           </div>
           <button
@@ -224,7 +237,7 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
           </div>
         )}
 
-        {/* Live Cloud & Manifest Synchronization Matrix */}
+        {/* Dynamic Manifest, Service Worker, Firestore, & Origin Live Matrix */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
           <div className="tech-surface-muted rounded-xl border p-3.5 space-y-1">
             <div className="flex items-center gap-1.5 font-extrabold text-blue-500">
@@ -234,31 +247,39 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
             <p className="font-mono-tabular font-bold" dir="ltr">
               ashraf-gold / computer_tech_store/main_data
             </p>
-            <p className="tech-text-secondary">
-              {lang === 'ar'
-                ? 'أي تغيير في المنتجات أو الاسم يظهر لحظياً في التطبيق.'
-                : 'Product, price & branding edits reflect live in-app.'}
+            <p className="tech-text-secondary truncate font-mono-tabular" dir="ltr" title={activeOrigin}>
+              {activeOrigin}
             </p>
           </div>
 
           <div className="tech-surface-muted rounded-xl border p-3.5 space-y-1">
             <div className="flex items-center gap-1.5 font-extrabold text-emerald-500">
               <Smartphone className="h-4 w-4" />
-              <span>{lang === 'ar' ? 'اسم وأيقونة التطبيق' : 'Live App Name & Icon'}</span>
+              <span>{lang === 'ar' ? 'Manifest و Service Worker ديناميكي' : 'Dynamic manifest.json & sw.js'}</span>
             </div>
             <p className="font-bold" dir="ltr">
               {englishAppName}
             </p>
-            <a
-              href="/manifest.json"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-blue-500 hover:underline font-mono-tabular"
-              dir="ltr"
-            >
-              <span>/manifest.json</span>
-              <ExternalLink className="h-3 w-3" />
-            </a>
+            <div className="flex flex-wrap items-center gap-3 font-mono-tabular" dir="ltr">
+              <a
+                href="/manifest.json"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-blue-500 hover:underline"
+              >
+                <span>/manifest.json</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+              <a
+                href="/sw.js"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-blue-500 hover:underline"
+              >
+                <span>/sw.js</span>
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
           </div>
 
           <div className="tech-surface-muted rounded-xl border p-3.5 space-y-1">
@@ -269,7 +290,7 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
               </span>
             </div>
             <p className="font-bold" dir="ltr">
-              Target SDK {status?.targetSdk || 35} • 64-bit • HTTPS TWA
+              Target SDK {status?.targetSdk || 35} • 64-bit • TWA + WebView
             </p>
             <a
               href="/.well-known/assetlinks.json"
@@ -285,261 +306,193 @@ export const AdminFilesPanel: React.FC<AdminFilesPanelProps> = ({ lang, storeDat
         </div>
       </div>
 
-      {/* Live-Linked Android TWA + Firebase Build Package (APK + Play Store AAB Generator) */}
-      <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <h4 className="text-sm font-extrabold flex items-center gap-2">
-              <FileArchive className="h-4 w-4 text-blue-500" />
-              <span>
-                {lang === 'ar'
-                  ? 'حزمة بناء التطبيق المربوطة بالموقع وFirebase (تنتج APK + AAB لـ Google Play)'
-                  : 'Live-Linked Android TWA + Firebase Project Bundle (Builds APK & Play Store AAB)'}
-              </span>
+      {/* Two One-Click Generated Ready Download Sections: APK & Play Store AAB */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Section 1: Direct Mobile APK */}
+        <div className="tech-surface rounded-2xl border p-5 shadow-sm flex flex-col justify-between gap-4">
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600/15 px-2.5 py-1 text-[11px] font-extrabold text-blue-500">
+              <Smartphone className="h-3.5 w-3.5" />
+              <span>Android APK • Direct Mobile Download</span>
+            </span>
+            <h4 className="text-sm font-extrabold">
+              {lang === 'ar'
+                ? `نسخة Android للتثبيت المباشر (${englishAppName})`
+                : `Direct Android APK Package (${englishAppName})`}
             </h4>
             <p className="tech-text-secondary text-xs leading-relaxed">
               {lang === 'ar'
-                ? 'تتضمن كود أندرويد المتكامل بـ Target SDK 35 وملف GitHub Actions وسكربت Gradle لإنتاج ملف APK للتثبيت المباشر على الموبايل وملف AAB مطابق لشروط النشر على Google Play، مع سحب الاسم الإنجليزي والأيقونة الحالية وربط Firebase تلقائياً.'
-                : 'Contains full API 35 Android TWA + WebView project, Play Store bundle split config, live Firestore sync metadata, dynamic app name/icon, Digital Asset Links, and automated GitHub Actions build.'}
+                ? `تُجهز تلقائياً باسم "${englishAppName}" وأيقونة المتجر الحالية ورابط الموقع الفعلي (${activeOrigin}) ومزامنة Firebase Firestore ليُحفظ مباشرة في التنزيلات على هاتف المدير.`
+                : `Automatically built with "${englishAppName}", current Store Icon, live ${activeOrigin} origin, and Firebase Firestore sync straight into your Downloads folder.`}
             </p>
           </div>
-          <a
-            href={projectZipUrl}
-            download
-            data-testid="download-android-project-zip"
-            className="tech-accent-btn inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold shadow-sm shrink-0"
+
+          <button
+            type="button"
+            disabled={downloadingKind !== null}
+            onClick={() => void handleGenerateAndDownload('apk')}
+            data-testid="download-apk-btn"
+            className="tech-accent-btn inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-xs sm:text-sm font-extrabold shadow-sm disabled:opacity-60"
           >
-            <Download className="h-4 w-4" />
+            {downloadingKind === 'apk' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
             <span>
-              {lang === 'ar'
-                ? 'تحميل مشروع الأندرويد المتكامل (.ZIP)'
-                : 'Download Linked Android Bundle (.ZIP)'}
+              {downloadingKind === 'apk'
+                ? lang === 'ar'
+                  ? 'جاري تجهيز وتنزيل نسخة Android...'
+                  : 'Generating Android APK...'
+                : lang === 'ar'
+                  ? 'تحميل نسخة Android (APK)'
+                  : 'Download Android Version (APK)'}
             </span>
-          </a>
+          </button>
         </div>
 
-        <form onSubmit={handleSaveBuildConfig} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-inherit">
-          <div>
-            <label className="mb-1 block text-xs font-bold">
-              {lang === 'ar' ? 'معرّف الحزمة (Package ID)' : 'Application Package ID'}
-            </label>
-            <input
-              type="text"
-              dir="ltr"
-              value={packageId}
-              onChange={(e) => setPackageId(e.target.value)}
-              className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-bold">
-              {lang === 'ar' ? 'رقم الإصدار (Version Code)' : 'Version Code'}
-            </label>
-            <input
-              type="number"
-              min={1}
-              dir="ltr"
-              value={versionCode}
-              onChange={(e) => setVersionCode(e.target.value)}
-              className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-bold">
-              {lang === 'ar' ? 'اسم الإصدار (Version Name)' : 'Version Name'}
-            </label>
-            <input
-              type="text"
-              dir="ltr"
-              value={versionName}
-              onChange={(e) => setVersionName(e.target.value)}
-              className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-bold">
-              {lang === 'ar' ? 'بصمة التوقيع SHA-256 (لـ Play Console)' : 'Play App Signing SHA-256'}
-            </label>
-            <input
-              type="text"
-              dir="ltr"
-              placeholder="AA:BB:CC:..."
-              value={sha256}
-              onChange={(e) => setSha256(e.target.value)}
-              className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
-            />
-          </div>
-          <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap items-center justify-between gap-2 pt-1">
-            <span className="tech-text-secondary text-[11px]">
-              {lang === 'ar'
-                ? 'ملاحظة تقنية: الخادم الويب الحالي لا يحتوي على Android SDK/JDK لترجمة ملفات APK/AAB الثنائية مباشرة، لذا يمكنك توليد المشروع من هنا وترجمته عبر Android Studio أو GitHub Actions ثم رفعه في البطاقات أدناه.'
-                : 'Note: This web runtime does not include Android SDK/JDK for direct binary compilation; export the synced project ZIP to build signed APK/AAB via Android Studio or GitHub Actions, then host the compiled binaries below.'}
+        {/* Section 2: Google Play Store AAB + PWABuilder API */}
+        <div className="tech-surface rounded-2xl border p-5 shadow-sm flex flex-col justify-between gap-4">
+          <div className="space-y-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600/15 px-2.5 py-1 text-[11px] font-extrabold text-emerald-500">
+              <PackageCheck className="h-3.5 w-3.5" />
+              <span>Google Play Store AAB • Target SDK 35</span>
             </span>
+            <h4 className="text-sm font-extrabold">
+              {lang === 'ar'
+                ? `حزمة النشر على Google Play (${englishAppName}.aab)`
+                : `Google Play Store Package (${englishAppName}.aab)`}
+            </h4>
+            <p className="tech-text-secondary text-xs leading-relaxed">
+              {lang === 'ar'
+                ? 'حزمة Google Play الرسمية الجاهزة (Android App Bundle / TWA) مع manifest.json و assetlinks.json وربط الموقع الفعلي مع تصدير مباشر عبر PWABuilder API عند النشر العام.'
+                : 'Play Console compliant Android App Bundle (AAB / TWA) configured with live manifest.json, assetlinks.json, and one-click PWABuilder CloudAPK packaging when publicly reachable.'}
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
             <button
-              type="submit"
-              disabled={savingConfig}
-              className="tech-surface-muted rounded-xl border px-4 py-2 text-xs font-extrabold hover:border-blue-500/50"
+              type="button"
+              disabled={downloadingKind !== null}
+              onClick={() => void handleGenerateAndDownload('aab')}
+              data-testid="download-aab-btn"
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs sm:text-sm font-extrabold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
             >
-              {savingConfig
-                ? lang === 'ar'
-                  ? 'جاري الحفظ...'
-                  : 'Saving...'
-                : lang === 'ar'
-                  ? 'حفظ إعدادات الإصدار'
-                  : 'Save Release Settings'}
+              {downloadingKind === 'aab' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>
+                {downloadingKind === 'aab'
+                  ? lang === 'ar'
+                    ? 'جاري تجهيز حزمة Play Store...'
+                    : 'Generating Play Store AAB...'
+                  : lang === 'ar'
+                    ? 'تحميل حزمة متجر Google Play (AAB)'
+                    : 'Download Google Play Package (AAB)'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              disabled={downloadingKind !== null}
+              onClick={() => void handleGenerateAndDownload('aab', { includeKit: true })}
+              data-testid="download-aab-kit-btn"
+              className="tech-surface-muted inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-3 text-xs font-extrabold hover:border-emerald-500/50 disabled:opacity-60"
+              title={
+                lang === 'ar'
+                  ? 'تحميل الحزمة الكاملة مع ملف التوقيع و assetlinks.json'
+                  : 'Full bundle including signing info & assetlinks.json'
+              }
+            >
+              {downloadingKind === 'aab-kit' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <PackageCheck className="h-4 w-4 text-emerald-500" />
+              )}
+              <span>{lang === 'ar' ? 'الحزمة + التوقيع' : 'Full Kit'}</span>
             </button>
           </div>
-        </form>
-      </div>
-
-      {/* Stored Binary Cards: APK for Mobile & AAB for Google Play Store */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Direct Mobile APK */}
-        <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <span className="inline-flex items-center gap-1 rounded-lg bg-blue-600/15 px-2.5 py-1 text-[11px] font-extrabold text-blue-500">
-                <Smartphone className="h-3.5 w-3.5" />
-                <span>APK • Android Direct Install</span>
-              </span>
-              <h4 className="mt-2 text-sm font-extrabold">
-                {lang === 'ar'
-                  ? `ملف تحميل الموبايل (${englishAppName}.apk)`
-                  : `Mobile Install File (${englishAppName}.apk)`}
-              </h4>
-              <p className="tech-text-secondary text-xs mt-1">
-                {lang === 'ar'
-                  ? 'للتثبيت المباشر على هواتف أندرويد خارج متجر Google Play.'
-                  : 'Direct APK package for downloading and installing on Android phones.'}
-              </p>
-            </div>
-            {status?.apk.exists && (
-              <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-500">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>{formatBytes(status.apk.sizeBytes)}</span>
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="tech-accent-btn inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold">
-              <Upload className="h-3.5 w-3.5" />
-              <span>
-                {uploadingKind === 'apk'
-                  ? lang === 'ar'
-                    ? 'جاري الرفع...'
-                    : 'Uploading...'
-                  : lang === 'ar'
-                    ? 'رفع وتخزين ملف APK'
-                    : 'Upload & Store .APK'}
-              </span>
-              <input
-                type="file"
-                accept=".apk,application/vnd.android.package-archive"
-                className="hidden"
-                onChange={(e) => {
-                  void handleUploadReleaseBinary('apk', e.target.files?.[0]);
-                  e.target.value = '';
-                }}
-              />
-            </label>
-
-            {status?.apk.exists && (
-              <>
-                <a
-                  href={status.apk.downloadUrl}
-                  download
-                  className="tech-surface-muted inline-flex items-center gap-1.5 rounded-xl border px-4 py-2 text-xs font-extrabold hover:border-blue-500/40"
-                >
-                  <Download className="h-3.5 w-3.5 text-blue-500" />
-                  <span>{lang === 'ar' ? 'تحميل APK للموبايل' : 'Download APK'}</span>
-                </a>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteReleaseBinary('apk')}
-                  aria-label="Delete stored APK"
-                  className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-2 text-rose-500 hover:bg-rose-500/20"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Google Play Store AAB */}
-        <div className="tech-surface rounded-2xl border p-5 shadow-sm space-y-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-600/15 px-2.5 py-1 text-[11px] font-extrabold text-emerald-500">
-                <PackageCheck className="h-3.5 w-3.5" />
-                <span>AAB • Google Play App Bundle</span>
-              </span>
-              <h4 className="mt-2 text-sm font-extrabold">
-                {lang === 'ar'
-                  ? `ملف النشر على Google Play (${englishAppName}.aab)`
-                  : `Play Store Upload File (${englishAppName}.aab)`}
-              </h4>
-              <p className="tech-text-secondary text-xs mt-1">
-                {lang === 'ar'
-                  ? 'صيغة Android App Bundle (AAB) المعتمدة من Google Play مع دعم Target SDK 35 و64-bit.'
-                  : 'Google Play Console AAB bundle compliant with Target SDK 35, 64-bit & Play App Signing.'}
-              </p>
-            </div>
-            {status?.aab.exists && (
-              <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-500">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>{formatBytes(status.aab.sizeBytes)}</span>
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="tech-accent-btn inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-extrabold">
-              <Upload className="h-3.5 w-3.5" />
-              <span>
-                {uploadingKind === 'aab'
-                  ? lang === 'ar'
-                    ? 'جاري الرفع...'
-                    : 'Uploading...'
-                  : lang === 'ar'
-                    ? 'رفع وتخزين ملف AAB'
-                    : 'Upload & Store .AAB'}
-              </span>
-              <input
-                type="file"
-                accept=".aab"
-                className="hidden"
-                onChange={(e) => {
-                  void handleUploadReleaseBinary('aab', e.target.files?.[0]);
-                  e.target.value = '';
-                }}
-              />
-            </label>
-
-            {status?.aab.exists && (
-              <>
-                <a
-                  href={status.aab.downloadUrl}
-                  download
-                  className="tech-surface-muted inline-flex items-center gap-1.5 rounded-xl border px-4 py-2 text-xs font-extrabold hover:border-emerald-500/40"
-                >
-                  <Download className="h-3.5 w-3.5 text-emerald-500" />
-                  <span>{lang === 'ar' ? 'تحميل AAB لـ Play Store' : 'Download AAB'}</span>
-                </a>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteReleaseBinary('aab')}
-                  aria-label="Delete stored AAB"
-                  className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-2 text-rose-500 hover:bg-rose-500/20"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </>
-            )}
-          </div>
         </div>
       </div>
+
+      {/* Live Package Identity & Play Store Settings */}
+      <form
+        onSubmit={handleSaveBuildConfig}
+        className="tech-surface rounded-2xl border p-5 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"
+      >
+        <div>
+          <label className="mb-1 block text-xs font-bold">
+            {lang === 'ar' ? 'معرّف الحزمة (Package ID)' : 'Application Package ID'}
+          </label>
+          <input
+            type="text"
+            dir="ltr"
+            value={packageId}
+            onChange={(e) => setPackageId(e.target.value)}
+            className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold">
+            {lang === 'ar' ? 'رقم الإصدار (Version Code)' : 'Version Code'}
+          </label>
+          <input
+            type="number"
+            min={1}
+            dir="ltr"
+            value={versionCode}
+            onChange={(e) => setVersionCode(e.target.value)}
+            className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold">
+            {lang === 'ar' ? 'اسم الإصدار (Version Name)' : 'Version Name'}
+          </label>
+          <input
+            type="text"
+            dir="ltr"
+            value={versionName}
+            onChange={(e) => setVersionName(e.target.value)}
+            className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold">
+            {lang === 'ar' ? 'بصمة SHA-256 (Google Play Console)' : 'Play App Signing SHA-256'}
+          </label>
+          <input
+            type="text"
+            dir="ltr"
+            placeholder="AA:BB:CC:..."
+            value={sha256}
+            onChange={(e) => setSha256(e.target.value)}
+            className="tech-surface-muted w-full rounded-xl border px-3 py-2 text-xs font-mono-tabular outline-none"
+          />
+        </div>
+        <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-inherit">
+          <span className="tech-text-secondary text-[11px]">
+            {lang === 'ar'
+              ? 'يتم تلقائياً استدعاء PWABuilder CloudAPK عندما يكون المتجر منشوراً على HTTPS عام، أو تصدير مشروع TWA المربوط بالكامل عند التشغيل المحلي.'
+              : 'Uses PWABuilder CloudAPK automatically on public HTTPS URLs to deliver signed APK/AAB binaries, or exports the synced Target SDK 35 TWA project bundle on local/private previews.'}
+          </span>
+          <button
+            type="submit"
+            disabled={savingConfig}
+            className="tech-surface-muted rounded-xl border px-4 py-2 text-xs font-extrabold hover:border-blue-500/50"
+          >
+            {savingConfig
+              ? lang === 'ar'
+                ? 'جاري الحفظ...'
+                : 'Saving...'
+              : lang === 'ar'
+                ? 'حفظ وتحديث إعدادات الحزمة'
+                : 'Save Release Settings'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

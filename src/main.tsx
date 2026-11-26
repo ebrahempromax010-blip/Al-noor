@@ -1,11 +1,10 @@
 import { createRoot } from 'react-dom/client';
-import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
-const CACHE_VERSION_KEY = 'ashraf_tech_cache_version';
-const CURRENT_APP_CACHE_VERSION = '2026.11.25.2';
+const CACHE_VERSION_KEY = 'alnour_pwa_cache_version';
+const CURRENT_APP_CACHE_VERSION = '2026.11.26.3';
 
 async function cleanupStaleCachesIfNeeded() {
   if (typeof window === 'undefined') return;
@@ -28,21 +27,25 @@ async function cleanupStaleCachesIfNeeded() {
 void cleanupStaleCachesIfNeeded();
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  try {
-    const updateSW = registerSW({
-      immediate: true,
-      onNeedRefresh() {
-        void cleanupStaleCachesIfNeeded().finally(() => {
-          updateSW(true);
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+      .then((reg) => {
+        void reg.update().catch(() => {});
+        reg.addEventListener('updatefound', () => {
+          const installing = reg.installing;
+          if (!installing) return;
+          installing.addEventListener('statechange', () => {
+            if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+              installing.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
         });
-      },
-      onRegisterError() {
+      })
+      .catch(() => {
         // Ignore silent SW registration issues in restricted environments
-      },
-    });
-  } catch {
-    // Graceful no-op in restricted preview contexts
-  }
+      });
+  });
 }
 
 createRoot(document.getElementById('root')!).render(

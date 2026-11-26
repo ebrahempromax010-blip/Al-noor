@@ -104,6 +104,8 @@ export async function syncDynamicPwaBranding(params: {
 
   const icons = await generatePngIconSet(params.storeIconUrl || '/pwa-512x512.png');
 
+  const siteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+
   try {
     const res = await fetch('/api/pwa/branding', {
       method: 'POST',
@@ -112,6 +114,7 @@ export async function syncDynamicPwaBranding(params: {
         storeNameEn: englishName,
         taglineEn,
         iconSourceKey,
+        siteOrigin,
         ...(icons || {}),
       }),
     });
@@ -121,6 +124,13 @@ export async function syncDynamicPwaBranding(params: {
       updateDomPwaTags(englishName, data.version || String(Date.now()));
     } else {
       updateDomPwaTags(englishName, String(Date.now()));
+    }
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .getRegistration('/')
+        .then((reg) => reg?.update().catch(() => {}))
+        .catch(() => {});
     }
   } catch {
     updateDomPwaTags(englishName, String(Date.now()));

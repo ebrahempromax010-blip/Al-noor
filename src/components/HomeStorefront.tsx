@@ -17,15 +17,12 @@ import {
   StoreData,
 } from '../types/store';
 import { normalizeSafeUrl } from '../utils/storeLogic';
-import { CurrencyCode } from '../utils/currencyLogic';
 import { ProductCard } from './ProductCard';
 
 interface HomeStorefrontProps {
   lang: Language;
   storeData: StoreData;
   searchQuery: string;
-  displayCurrency?: CurrencyCode;
-  exchangeRates?: Record<CurrencyCode, number>;
   onNavigateCatalog: (category: CatalogCategoryTab) => void;
   onAddToCart: (product: Product) => void;
   onZoomProduct: (product: Product) => void;
@@ -36,8 +33,6 @@ export const HomeStorefront: React.FC<HomeStorefrontProps> = memo(({
   lang,
   storeData,
   searchQuery,
-  displayCurrency,
-  exchangeRates,
   onNavigateCatalog,
   onAddToCart,
   onZoomProduct,
@@ -134,8 +129,6 @@ export const HomeStorefront: React.FC<HomeStorefrontProps> = memo(({
                   product={product}
                   lang={lang}
                   currency={currency}
-                  displayCurrency={displayCurrency}
-                  exchangeRates={exchangeRates}
                   layoutStyle={settings.layoutStyle}
                   onAddToCart={onAddToCart}
                   onZoom={onZoomProduct}
@@ -238,8 +231,6 @@ export const HomeStorefront: React.FC<HomeStorefrontProps> = memo(({
                   product={product}
                   lang={lang}
                   currency={currency}
-                  displayCurrency={displayCurrency}
-                  exchangeRates={exchangeRates}
                   layoutStyle={settings.layoutStyle}
                   onAddToCart={onAddToCart}
                   onZoom={onZoomProduct}
@@ -279,8 +270,6 @@ export const HomeStorefront: React.FC<HomeStorefrontProps> = memo(({
                   product={product}
                   lang={lang}
                   currency={currency}
-                  displayCurrency={displayCurrency}
-                  exchangeRates={exchangeRates}
                   layoutStyle={settings.layoutStyle}
                   onAddToCart={onAddToCart}
                   onZoom={onZoomProduct}

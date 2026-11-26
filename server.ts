@@ -20,7 +20,7 @@ import {
   DEFAULT_PWA_ENGLISH_TAGLINE,
   resolvePwaEnglishName,
 } from './src/utils/pwaLogic';
-import { buildZipArchive } from './src/utils/zipBuilder';
+import { buildZipArchive, extractEntryFromZip } from './src/utils/zipBuilder';
 import {
   buildAndroidProjectFiles,
   buildAssetLinksJson,
@@ -29,6 +29,10 @@ import {
   PLAY_STORE_TARGET_SDK,
   sanitizeAndroidPackageId,
 } from './src/utils/androidProjectGenerator';
+import {
+  buildPwaBuilderCloudApkPayload,
+  isPublicHttpsOriginForCloudApk,
+} from './src/utils/pwabuilderHelper';
 
 dotenv.config();
 
@@ -36,9 +40,6 @@ const PORT = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const UPLOADS_DIR = path.resolve(process.cwd(), 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const RELEASES_DIR = path.resolve(UPLOADS_DIR, 'releases');
-fs.mkdirSync(RELEASES_DIR, { recursive: true });
 
 const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
 const STORE_FIRESTORE_REST_URL =
@@ -451,58 +452,6 @@ async function startServer() {
     }
   );
 
-  // Binary APK / AAB upload endpoint (up to 120MB) — mounted before express.json
-  app.post(
-    '/api/admin/files/upload/:kind',
-    express.raw({
-      type: () => true,
-      limit: '120mb',
-    }),
-    async (req, res) => {
-      try {
-        const kind = String(req.params.kind || '').toLowerCase();
-        if (kind !== 'apk' && kind !== 'aab') {
-          res.status(400).json({ error: 'صيغة الملف يجب أن تكون apk أو aab فقط.' });
-          return;
-        }
-        const buffer = req.body as Buffer;
-        if (!Buffer.isBuffer(buffer) || buffer.length < 100) {
-          res.status(400).json({ error: 'الملف المرفوع فارغ أو غير مكتمل.' });
-          return;
-        }
-        // Real APK and AAB files are ZIP containers starting with PK\x03\x04
-        if (buffer[0] !== 0x50 || buffer[1] !== 0x4b || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
-          res.status(400).json({
-            error:
-              kind === 'apk'
-                ? 'ملف APK غير صالح (يجب أن يكون ملف أندرويد مترجم بصيغة APK حقيقية).'
-                : 'ملف AAB غير صالح (يجب أن يكون حزمة أندرويد App Bundle بصيغة AAB حقيقية).',
-          });
-          return;
-        }
-
-        const fileName = kind === 'apk' ? 'app-release.apk' : 'app-release.aab';
-        const dest = path.resolve(RELEASES_DIR, fileName);
-        if (!dest.startsWith(RELEASES_DIR + path.sep)) {
-          res.status(400).json({ error: 'مسار غير صالح.' });
-          return;
-        }
-        await fs.promises.writeFile(dest, buffer);
-        const stats = await fs.promises.stat(dest);
-        res.status(201).json({
-          ok: true,
-          kind,
-          sizeBytes: stats.size,
-          updatedAt: stats.mtime.toISOString(),
-          downloadUrl: `/api/admin/files/download/${kind}`,
-        });
-      } catch (err) {
-        console.error('Release binary upload failed:', err);
-        res.status(500).json({ error: 'تعذر حفظ ملف التطبيق على الخادم.' });
-      }
-    }
-  );
-
   app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '7d' }));
   app.use(express.json({ limit: '2mb' }));
 
@@ -513,15 +462,134 @@ async function startServer() {
     const proto = req.headers['x-forwarded-proto']
       ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
       : req.protocol || 'http';
+    const liveOrigin = `${proto}://${host}`;
     const manifest = buildDynamicManifestObject({
       storeNameEn: pwaBrandState.storeNameEn,
       taglineEn: pwaBrandState.taglineEn,
       version: pwaBrandState.version,
-      origin: `${proto}://${host}`,
+      origin: liveOrigin,
     });
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.json(manifest);
+  });
+
+  // Dynamic Service Worker reflecting current Store Name, Icon Version, and Origin
+  app.get('/sw.js', (req, res) => {
+    const host = req.get('host') || `localhost:${PORT}`;
+    const proto = req.headers['x-forwarded-proto']
+      ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
+      : req.protocol || 'http';
+    const liveOrigin = `${proto}://${host}`;
+    const appName = resolvePwaEnglishName(pwaBrandState.storeNameEn);
+    const slug =
+      appName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'alnour';
+    const v = pwaBrandState.version;
+
+    const swScript = `/* Dynamic Service Worker for ${appName} (${liveOrigin}) */
+const STORE_NAME = ${JSON.stringify(appName)};
+const STORE_ORIGIN = ${JSON.stringify(liveOrigin)};
+const CACHE_VERSION = ${JSON.stringify(v)};
+const CACHE_NAME = "alnour-pwa-${slug}-" + CACHE_VERSION;
+const CORE_SHELL = [
+  "/",
+  "/api/pwa-icon/192.png?v=" + encodeURIComponent(CACHE_VERSION),
+  "/api/pwa-icon/512.png?v=" + encodeURIComponent(CACHE_VERSION)
+];
+
+self.addEventListener("install", (event) => {
+  self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(
+        CORE_SHELL.map((url) =>
+          fetch(url, { cache: "no-store" })
+            .then((resp) => (resp && resp.ok ? cache.put(url, resp) : undefined))
+            .catch(() => undefined)
+        )
+      )
+    )
+  );
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key.startsWith("alnour-pwa-") && key !== CACHE_NAME)
+            .map((oldKey) => caches.delete(oldKey))
+        )
+      )
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (!req || req.method !== "GET") return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  // Never serve stale responses for API calls, dynamic manifest, AssetLinks, or sw.js
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/manifest.json" ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/sw.js" ||
+    url.pathname.startsWith("/.well-known/")
+  ) {
+    event.respondWith(fetch(req, { cache: "no-store" }));
+    return;
+  }
+
+  // Navigation requests: Network-first with cached shell fallback
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req)
+        .then((resp) => {
+          if (resp && resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put("/", copy)).catch(() => {});
+          }
+          return resp;
+        })
+        .catch(() => caches.match("/").then((cached) => cached || Response.error()))
+    );
+    return;
+  }
+
+  // Static assets: Stale-While-Revalidate
+  event.respondWith(
+    caches.match(req).then((cached) => {
+      const networkFetch = fetch(req)
+        .then((resp) => {
+          if (resp && resp.ok && resp.type === "basic") {
+            const copy = resp.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
+          return resp;
+        })
+        .catch(() => cached);
+      return cached || networkFetch;
+    })
+  );
+});
+`;
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.send(swScript);
   });
 
   app.get('/.well-known/assetlinks.json', (_req, res) => {
@@ -534,45 +602,24 @@ async function startServer() {
     res.json(links);
   });
 
-  app.get('/api/admin/files/status', async (req, res) => {
+  app.get('/api/admin/files/status', (req, res) => {
     const host = req.get('host') || `localhost:${PORT}`;
     const proto = req.headers['x-forwarded-proto']
       ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
       : req.protocol || 'http';
-    const liveOrigin = `${proto}://${host}`;
+    const liveOrigin = androidReleaseConfig.siteUrlOverride || `${proto}://${host}`;
 
-    const inspectRelease = async (kind: 'apk' | 'aab') => {
-      const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
-      try {
-        const st = await fs.promises.stat(target);
-        return {
-          exists: true,
-          sizeBytes: st.size,
-          updatedAt: st.mtime.toISOString(),
-          downloadUrl: `/api/admin/files/download/${kind}`,
-        };
-      } catch {
-        return {
-          exists: false,
-          sizeBytes: 0,
-          updatedAt: null,
-          downloadUrl: `/api/admin/files/download/${kind}`,
-        };
-      }
-    };
-
-    const [apk, aab] = await Promise.all([inspectRelease('apk'), inspectRelease('aab')]);
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       storeNameEn: pwaBrandState.storeNameEn,
+      iconVersion: pwaBrandState.version,
       liveOrigin,
+      cloudApkEligible: isPublicHttpsOriginForCloudApk(liveOrigin),
       firebaseProjectId: 'ashraf-gold',
       firestoreDocPath: 'computer_tech_store/main_data',
       targetSdk: PLAY_STORE_TARGET_SDK,
       minSdk: PLAY_STORE_MIN_SDK,
       config: androidReleaseConfig,
-      apk,
-      aab,
     });
   });
 
@@ -606,8 +653,14 @@ async function startServer() {
     res.json({ ok: true, config: androidReleaseConfig });
   });
 
-  app.get('/api/admin/files/android-project.zip', async (req, res) => {
+  app.get('/api/admin/files/generate/:kind', async (req, res) => {
     try {
+      const kind = String(req.params.kind || '').toLowerCase();
+      if (kind !== 'apk' && kind !== 'aab') {
+        res.status(400).json({ error: 'صيغة التصدير يجب أن تكون apk أو aab.' });
+        return;
+      }
+
       const host = req.get('host') || `localhost:${PORT}`;
       const proto = req.headers['x-forwarded-proto']
         ? String(req.headers['x-forwarded-proto']).split(',')[0].trim()
@@ -630,7 +683,83 @@ async function startServer() {
           ? req.query.sha256.trim()
           : androidReleaseConfig.sha256Fingerprint;
 
-      const readFallbackPng = async (variant: PwaIconVariant, fallbackFile: string): Promise<Buffer | null> => {
+      const slug =
+        resolvePwaEnglishName(pwaBrandState.storeNameEn)
+          .replace(/[^a-zA-Z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'Al-Nour-Computer';
+
+      // Attempt live PWABuilder CloudAPK packaging when hosted on a public HTTPS origin
+      const useCloudApk =
+        req.query.mode !== 'source' && isPublicHttpsOriginForCloudApk(websiteOrigin);
+      if (useCloudApk) {
+        try {
+          const cloudPayload = buildPwaBuilderCloudApkPayload({
+            storeNameEn: pwaBrandState.storeNameEn,
+            websiteOrigin,
+            packageId,
+            versionCode,
+            versionName,
+            iconVersion: pwaBrandState.version,
+          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 35000);
+          const cloudRes = await fetch(
+            'https://pwabuilder-cloudapk.azurewebsites.net/generateAppPackage',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(cloudPayload),
+              signal: controller.signal,
+            }
+          );
+          clearTimeout(timer);
+
+          if (cloudRes.ok) {
+            const arrayBuf = await cloudRes.arrayBuffer();
+            const zipBuffer = Buffer.from(arrayBuf);
+            if (zipBuffer.length > 100 && zipBuffer[0] === 0x50 && zipBuffer[1] === 0x4b) {
+              if (req.query.includeKit === '1') {
+                res.setHeader('Content-Type', 'application/zip');
+                res.setHeader(
+                  'Content-Disposition',
+                  `attachment; filename="${slug}-GooglePlay-AAB-Bundle.zip"`
+                );
+                res.setHeader('X-Build-Source', 'pwabuilder-cloudapk');
+                res.setHeader('Cache-Control', 'no-store');
+                res.send(zipBuffer);
+                return;
+              }
+              const targetEntry = extractEntryFromZip(zipBuffer, (entryName) =>
+                entryName.toLowerCase().endsWith(`.${kind}`)
+              );
+              if (targetEntry) {
+                res.setHeader(
+                  'Content-Type',
+                  kind === 'apk'
+                    ? 'application/vnd.android.package-archive'
+                    : 'application/octet-stream'
+                );
+                res.setHeader(
+                  'Content-Disposition',
+                  `attachment; filename="${slug}.${kind}"`
+                );
+                res.setHeader('X-Build-Source', 'pwabuilder-cloudapk');
+                res.setHeader('Cache-Control', 'no-store');
+                res.send(targetEntry.data);
+                return;
+              }
+            }
+          }
+        } catch {
+          // Graceful fallback to live-synced local TWA + Firebase Gradle bundle below
+        }
+      }
+
+      // Live-linked Android TWA + Firebase Gradle bundle ready for Android Studio / GitHub Actions
+      const readFallbackPng = async (
+        variant: PwaIconVariant,
+        fallbackFile: string
+      ): Promise<Buffer | null> => {
         if (pwaBrandState.iconBuffers[variant]) return pwaBrandState.iconBuffers[variant];
         const fp = path.join(PUBLIC_DIR, fallbackFile);
         try {
@@ -659,60 +788,25 @@ async function startServer() {
       });
 
       const zipBuf = buildZipArchive(entries);
-      const slug = resolvePwaEnglishName(pwaBrandState.storeNameEn)
-        .replace(/[^a-zA-Z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
+      const outName =
+        kind === 'apk'
+          ? `${slug}-Android-APK-Package.zip`
+          : `${slug}-GooglePlay-AAB-Package.zip`;
       res.setHeader('Content-Type', 'application/zip');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${slug || 'Al-Nour-Computer'}-Android-PlayStore-Project.zip"`
-      );
+      res.setHeader('Content-Disposition', `attachment; filename="${outName}"`);
+      res.setHeader('X-Build-Source', 'local-twa-bundle');
       res.setHeader('Cache-Control', 'no-store');
       res.send(zipBuf);
     } catch (err) {
-      console.error('Failed to generate Android project zip:', err);
-      res.status(500).json({ error: 'تعذر إنشاء حزمة مشروع الأندرويد.' });
+      console.error('Failed to generate Android package:', err);
+      res.status(500).json({ error: 'تعذر تجهيز حزمة الأندرويد.' });
     }
   });
 
-  app.get('/api/admin/files/download/:kind', async (req, res) => {
-    const kind = String(req.params.kind || '').toLowerCase();
-    if (kind !== 'apk' && kind !== 'aab') {
-      res.status(404).end();
-      return;
-    }
-    const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
-    if (!fs.existsSync(target)) {
-      res.status(404).json({ error: 'لم يتم رفع هذا الملف بعد في لوحة الإدارة.' });
-      return;
-    }
-    const slug = resolvePwaEnglishName(pwaBrandState.storeNameEn)
-      .replace(/[^a-zA-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-    res.setHeader(
-      'Content-Type',
-      kind === 'apk' ? 'application/vnd.android.package-archive' : 'application/octet-stream'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${slug || 'Al-Nour-Computer'}.${kind}"`
-    );
-    res.sendFile(target);
-  });
-
-  app.delete('/api/admin/files/:kind', async (req, res) => {
-    const kind = String(req.params.kind || '').toLowerCase();
-    if (kind !== 'apk' && kind !== 'aab') {
-      res.status(400).json({ error: 'صيغة غير صالحة.' });
-      return;
-    }
-    const target = path.resolve(RELEASES_DIR, kind === 'apk' ? 'app-release.apk' : 'app-release.aab');
-    try {
-      await fs.promises.unlink(target);
-    } catch {
-      // ignore if missing
-    }
-    res.json({ ok: true });
+  // Backward-compatible alias for direct Android project bundle download
+  app.get('/api/admin/files/android-project.zip', (req, res) => {
+    const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    res.redirect(307, `/api/admin/files/generate/aab${qs ? qs + '&mode=source' : '?mode=source'}`);
   });
 
   app.get('/api/pwa/branding', (_req, res) => {
@@ -730,11 +824,16 @@ async function startServer() {
       storeNameEn?: string;
       taglineEn?: string;
       iconSourceKey?: string;
+      siteOrigin?: string;
       icon180DataUrl?: string;
       icon192DataUrl?: string;
       icon512DataUrl?: string;
       iconMaskable512DataUrl?: string;
     };
+
+    if (typeof body?.siteOrigin === 'string' && /^https?:\/\//i.test(body.siteOrigin.trim())) {
+      androidReleaseConfig.siteUrlOverride = body.siteOrigin.trim().replace(/\/+$/, '');
+    }
 
     const nextNameEn = resolvePwaEnglishName(body?.storeNameEn || pwaBrandState.storeNameEn);
     const nextTaglineEn =

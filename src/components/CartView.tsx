@@ -20,18 +20,10 @@ import {
   formatWhatsappOrderMessage,
   sanitizeOrderPayload,
 } from '../utils/storeLogic';
-import {
-  buildRelativeRateTable,
-  CurrencyCode,
-  formatStorePriceDisplay,
-  resolveBaseCurrencyCode,
-} from '../utils/currencyLogic';
 
 interface CartViewProps {
   lang: Language;
   currency: string;
-  displayCurrency?: CurrencyCode;
-  exchangeRates?: Record<CurrencyCode, number>;
   orderWhatsappNumber: string;
   cart: CartItem[];
   products: Product[];
@@ -55,8 +47,6 @@ function triggerWhatsappClientLink(url: string) {
 export const CartView: React.FC<CartViewProps> = ({
   lang,
   currency,
-  displayCurrency,
-  exchangeRates,
   orderWhatsappNumber,
   cart,
   products,
@@ -101,15 +91,6 @@ export const CartView: React.FC<CartViewProps> = ({
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
   const grandTotal = detailedItems.reduce((sum, entry) => sum + entry.lineTotal, 0);
-  const baseCode = resolveBaseCurrencyCode(currency);
-  const ratesTable = exchangeRates || buildRelativeRateTable(baseCode, null);
-  const formattedGrandTotal = formatStorePriceDisplay(
-    grandTotal,
-    currency,
-    displayCurrency || baseCode,
-    ratesTable,
-    lang
-  );
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -211,22 +192,7 @@ export const CartView: React.FC<CartViewProps> = ({
       ) : (
         <div className="space-y-4">
           <div className="space-y-3">
-            {detailedItems.map(({ product, quantity, unitPrice, lineTotal }) => {
-              const formattedUnit = formatStorePriceDisplay(
-                unitPrice,
-                currency,
-                displayCurrency || baseCode,
-                ratesTable,
-                lang
-              );
-              const formattedLine = formatStorePriceDisplay(
-                lineTotal,
-                currency,
-                displayCurrency || baseCode,
-                ratesTable,
-                lang
-              );
-              return (
+            {detailedItems.map(({ product, quantity, unitPrice, lineTotal }) => (
               <div
                 key={product.id}
                 data-testid={`cart-item-${product.id}`}
@@ -243,12 +209,12 @@ export const CartView: React.FC<CartViewProps> = ({
                       {lang === 'ar' ? product.nameAr : product.nameEn}
                     </h3>
                     <p className="tech-text-secondary text-xs font-mono-tabular">
-                      {formattedUnit.formattedNumber} {formattedUnit.currencyUnit}{' '}
+                      {unitPrice.toLocaleString('en-US')} {currency}{' '}
                       {lang === 'ar' ? 'للقطعة' : 'each'}
                     </p>
                     <p className="text-xs font-extrabold text-blue-600 dark:text-sky-400 font-mono-tabular">
                       {lang === 'ar' ? 'الإجمالي:' : 'Subtotal:'}{' '}
-                      {formattedLine.formattedNumber} {formattedLine.currencyUnit}
+                      {lineTotal.toLocaleString('en-US')} {currency}
                     </p>
                   </div>
                 </div>
@@ -287,8 +253,7 @@ export const CartView: React.FC<CartViewProps> = ({
                   </button>
                 </div>
               </div>
-              );
-            })}
+            ))}
           </div>
 
           {/* Automatic Total Summary + Checkout Trigger */}
@@ -302,13 +267,8 @@ export const CartView: React.FC<CartViewProps> = ({
                   data-testid="cart-grand-total"
                   className="font-mono-tabular text-2xl font-extrabold text-blue-600 dark:text-sky-400"
                 >
-                  {formattedGrandTotal.formattedNumber} {formattedGrandTotal.currencyUnit}
+                  {grandTotal.toLocaleString('en-US')} {currency}
                 </span>
-                {formattedGrandTotal.isConverted && (
-                  <p className="tech-text-secondary font-mono-tabular text-xs">
-                    ≈ {grandTotal.toLocaleString('en-US')} {currency}
-                  </p>
-                )}
               </div>
             </div>
 

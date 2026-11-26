@@ -24,6 +24,7 @@ import {
   isDesktopDevice,
   sanitizeStoreDataForCloud,
 } from './utils/storeLogic';
+import { resolveInstallClickAction, type InstallPlatform } from './utils/pwaLogic';
 import { syncDynamicPwaBranding } from './utils/pwaBrandingSync';
 import { Header } from './components/Header';
 import { InstallGuideModal, OfflineBanner } from './components/PWAComponents';
@@ -42,8 +43,24 @@ import { BottomNavBar } from './components/BottomNavBar';
 import { AdminPinModal } from './components/AdminPinModal';
 import { AdminDashboard } from './components/AdminDashboard';
 
+const STORE_LOCAL_CACHE_KEY = 'alnour_store_cache_v1';
+
+function readCachedStoreData(): StoreData {
+  try {
+    const raw = window.localStorage.getItem(STORE_LOCAL_CACHE_KEY);
+    if (raw) {
+      return applyRemoteStoreData(JSON.parse(raw) as Partial<StoreData>);
+    }
+  } catch {
+    // Ignore invalid local cache
+  }
+  return DEFAULT_STORE_DATA;
+}
+
 export default function App() {
-  const [storeData, setStoreData] = useState<StoreData>(DEFAULT_STORE_DATA);
+  const [storeData, setStoreData] = useState<StoreData>(() =>
+    typeof window !== 'undefined' ? readCachedStoreData() : DEFAULT_STORE_DATA
+  );
   const [lang, setLang] = useState<Language>('ar');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [selectedWallpaperUrl, setSelectedWallpaperUrl] = useState<string>('');
@@ -58,9 +75,9 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState('');
 
   // Modals: PWA Install, OS Downloads Center / Mobile Alert, User Settings + AI, Admin PIN
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+  const { isInstallable, isInstalled, platform, isInIframe, install } = usePWAInstall();
   const isOnline = useOnlineStatus();
-  const [installModalMode, setInstallModalMode] = useState<'ios' | 'desktop' | null>(null);
+  const [installModalMode, setInstallModalMode] = useState<InstallPlatform | null>(null);
   const [osCenterOpen, setOsCenterOpen] = useState(false);
   const [mobileBlockedAlertOpen, setMobileBlockedAlertOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -179,6 +196,11 @@ export default function App() {
         if (snapshot.exists()) {
           const nextData = applyRemoteStoreData(snapshot.data() as Partial<StoreData>);
           setStoreData(nextData);
+          try {
+            window.localStorage.setItem(STORE_LOCAL_CACHE_KEY, JSON.stringify(nextData));
+          } catch {
+            // Ignore quota errors
+          }
           setCloudError(null);
         } else if (!initAttemptedRef.current) {
           initAttemptedRef.current = true;
@@ -342,19 +364,50 @@ export default function App() {
   };
 
   const handleInstallClick = async () => {
-    if (isIOS) {
+    const action = resolveInstallClickAction({
+      platform,
+      hasNativePrompt: isInstallable,
+      isStandalone: isInstalled,
+    });
+    if (action === 'already_installed') return;
+    if (action === 'show_ios_guide') {
       setInstallModalMode('ios');
       return;
     }
-    if (isInstallable) {
-      const accepted = await install();
-      if (!accepted) {
-        setInstallModalMode('desktop');
-      }
+
+    // Attempt instant native OS install on Android & Computer (also waits briefly for early SW prompt)
+    const accepted = await install();
+    if (accepted) {
+      setInstallModalMode(null);
+      showToast(
+        lang === 'ar'
+          ? 'تم تثبيت التطبيق بنجاح على جهازك!'
+          : 'App installed directly onto your device!'
+      );
       return;
     }
-    setInstallModalMode('desktop');
+
+    setInstallModalMode(platform === 'android' ? 'android' : 'desktop');
   };
+
+  // If native prompt becomes ready while Android/Desktop guide modal is open, trigger it immediately
+  useEffect(() => {
+    if (!installModalMode || installModalMode === 'ios' || !isInstallable) return;
+    let cancelled = false;
+    void install().then((accepted) => {
+      if (!cancelled && accepted) {
+        setInstallModalMode(null);
+        showToast(
+          lang === 'ar'
+            ? 'تم تثبيت التطبيق بنجاح على جهازك!'
+            : 'App installed directly onto your device!'
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [installModalMode, isInstallable, install, lang, showToast]);
 
   const handleSystemTickerClick = () => {
     const desktop = isDesktopDevice(
@@ -542,10 +595,13 @@ export default function App() {
       {/* Modals */}
       <InstallGuideModal
         open={installModalMode !== null}
-        mode={installModalMode || 'desktop'}
+        mode={installModalMode || platform}
         isInstalled={isInstalled}
+        isInstallable={isInstallable}
+        isInIframe={isInIframe}
         lang={lang}
         storeName={identity.storeName}
+        onTriggerInstantInstall={() => void handleInstallClick()}
         onClose={() => setInstallModalMode(null)}
       />
 

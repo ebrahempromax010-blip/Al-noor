@@ -21,6 +21,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script>
+      window.__deferredPwaPrompt = null;
+      window.__pwaAppInstalled = false;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__deferredPwaPrompt = e;
+        window.__pwaAppInstalled = false;
+        window.dispatchEvent(new CustomEvent('alnour:pwa-prompt-captured'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__deferredPwaPrompt = null;
+        window.__pwaAppInstalled = true;
+        window.dispatchEvent(new CustomEvent('alnour:pwa-installed'));
+      });
+    </script>
   </head>
   <body class="antialiased selection:bg-blue-500/30 selection:text-blue-900 dark:selection:text-sky-200">
     <div id="root"></div>

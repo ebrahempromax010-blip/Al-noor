@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   buildDynamicManifestObject,
   buildPwaShortName,
+  detectInstallPlatform,
   evaluateInstallButtonVisibility,
+  resolveInstallClickAction,
   resolvePwaEnglishName,
 } from './pwaLogic.ts';
 
@@ -14,6 +16,52 @@ test('resolvePwaEnglishName and buildPwaShortName enforce English mobile icon na
 
   assert.equal(buildPwaShortName('Al-Nour Computer'), 'Al-Nour');
   assert.ok(buildPwaShortName('Al-Nour Pro Workstation Store').length <= 12);
+});
+
+test('detectInstallPlatform identifies iPhone, iPad, Android, and desktop accurately', () => {
+  assert.equal(
+    detectInstallPlatform('Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15'),
+    'ios'
+  );
+  assert.equal(
+    detectInstallPlatform('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15', 5),
+    'ios'
+  );
+  assert.equal(
+    detectInstallPlatform('Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/126.0.0.0 Mobile Safari/537.36'),
+    'android'
+  );
+  assert.equal(
+    detectInstallPlatform('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36'),
+    'desktop'
+  );
+});
+
+test('resolveInstallClickAction triggers instant native prompt whenever available on Android or PC', () => {
+  assert.equal(
+    resolveInstallClickAction({ platform: 'android', hasNativePrompt: true, isStandalone: false }),
+    'trigger_native_prompt'
+  );
+  assert.equal(
+    resolveInstallClickAction({ platform: 'desktop', hasNativePrompt: true, isStandalone: false }),
+    'trigger_native_prompt'
+  );
+  assert.equal(
+    resolveInstallClickAction({ platform: 'ios', hasNativePrompt: false, isStandalone: false }),
+    'show_ios_guide'
+  );
+  assert.equal(
+    resolveInstallClickAction({ platform: 'android', hasNativePrompt: false, isStandalone: false }),
+    'show_android_guide'
+  );
+  assert.equal(
+    resolveInstallClickAction({ platform: 'desktop', hasNativePrompt: false, isStandalone: false }),
+    'show_desktop_guide'
+  );
+  assert.equal(
+    resolveInstallClickAction({ platform: 'android', hasNativePrompt: true, isStandalone: true }),
+    'already_installed'
+  );
 });
 
 test('evaluateInstallButtonVisibility hides when installed and restores when uninstalled', () => {

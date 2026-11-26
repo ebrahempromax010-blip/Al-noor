@@ -1,3 +1,12 @@
+export type InstallPlatform = 'ios' | 'android' | 'desktop';
+
+export type InstallClickAction =
+  | 'already_installed'
+  | 'trigger_native_prompt'
+  | 'show_ios_guide'
+  | 'show_android_guide'
+  | 'show_desktop_guide';
+
 export interface PwaInstallSignals {
   isStandalone: boolean;
   appInstalledEventFired: boolean;
@@ -16,6 +25,44 @@ export interface PwaInstallDecision {
 
 export const DEFAULT_PWA_ENGLISH_NAME = 'Al-Nour Computer';
 export const DEFAULT_PWA_ENGLISH_TAGLINE = 'Computers, Laptops, Accessories & Genuine Software';
+
+/**
+ * Classifies the visitor's device into ios (iPhone/iPad), android, or desktop (Windows/Mac/Linux).
+ */
+export function detectInstallPlatform(
+  userAgent: string,
+  maxTouchPoints: number = 0
+): InstallPlatform {
+  const ua = String(userAgent || '').toLowerCase();
+  if (/iphone|ipad|ipod/.test(ua) || (/macintosh/.test(ua) && maxTouchPoints > 1)) {
+    return 'ios';
+  }
+  if (/android/.test(ua)) {
+    return 'android';
+  }
+  return 'desktop';
+}
+
+/**
+ * Decides the exact action to take when the user taps the Install App button.
+ * Native 1-tap prompt is always preferred whenever the browser provides beforeinstallprompt.
+ */
+export function resolveInstallClickAction(params: {
+  platform: InstallPlatform;
+  hasNativePrompt: boolean;
+  isStandalone: boolean;
+}): InstallClickAction {
+  if (params.isStandalone) {
+    return 'already_installed';
+  }
+  if (params.platform === 'ios') {
+    return 'show_ios_guide';
+  }
+  if (params.hasNativePrompt) {
+    return 'trigger_native_prompt';
+  }
+  return params.platform === 'android' ? 'show_android_guide' : 'show_desktop_guide';
+}
 
 /**
  * Ensures the installed PWA launcher name on mobile/desktop always uses the English store name.
@@ -150,6 +197,10 @@ export function buildDynamicManifestObject(input: DynamicManifestInput) {
     start_url: '/',
     scope: '/',
     display: 'standalone',
+    display_override: ['standalone', 'window-controls-overlay', 'minimal-ui'],
+    launch_handler: {
+      client_mode: 'focus-existing',
+    },
     orientation: 'portrait-primary',
     background_color: '#0A0F1C',
     theme_color: '#0A0F1C',

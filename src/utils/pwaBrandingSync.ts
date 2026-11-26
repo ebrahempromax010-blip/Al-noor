@@ -70,17 +70,18 @@ async function generatePngIconSet(iconUrl: string): Promise<GeneratedIconSet | n
   }
 }
 
+let lastSyncedBrandingVersion = '';
+
 function updateDomPwaTags(englishName: string, version: string) {
   const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
   if (appleTitle) {
     appleTitle.setAttribute('content', englishName);
   }
 
+  // Never mutate <link rel="manifest"> href at runtime — Chromium invalidates
+  // beforeinstallprompt & getInstalledRelatedApps() when the manifest URL changes.
+  // The manifest endpoint already serves Cache-Control: no-store with versioned icon URLs.
   const v = encodeURIComponent(version);
-  const manifestLink = document.querySelector('link[rel="manifest"]');
-  if (manifestLink) {
-    manifestLink.setAttribute('href', `/manifest.json?v=${v}`);
-  }
 
   const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
   if (appleIcon) {
@@ -119,14 +120,19 @@ export async function syncDynamicPwaBranding(params: {
       }),
     });
 
+    let nextVersion = String(Date.now());
     if (res.ok) {
       const data = (await res.json()) as { version?: string };
-      updateDomPwaTags(englishName, data.version || String(Date.now()));
-    } else {
-      updateDomPwaTags(englishName, String(Date.now()));
+      nextVersion = data.version || nextVersion;
     }
+    updateDomPwaTags(englishName, nextVersion);
 
-    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    if (
+      nextVersion !== lastSyncedBrandingVersion &&
+      typeof navigator !== 'undefined' &&
+      'serviceWorker' in navigator
+    ) {
+      lastSyncedBrandingVersion = nextVersion;
       navigator.serviceWorker
         .getRegistration('/')
         .then((reg) => reg?.update().catch(() => {}))

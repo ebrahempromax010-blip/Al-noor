@@ -496,6 +496,9 @@ const CACHE_VERSION = ${JSON.stringify(v)};
 const CACHE_NAME = "alnour-pwa-${slug}-" + CACHE_VERSION;
 const CORE_SHELL = [
   "/",
+  "/manifest.json",
+  "/icon.svg",
+  "/api/pwa-icon/180.png?v=" + encodeURIComponent(CACHE_VERSION),
   "/api/pwa-icon/192.png?v=" + encodeURIComponent(CACHE_VERSION),
   "/api/pwa-icon/512.png?v=" + encodeURIComponent(CACHE_VERSION)
 ];
@@ -539,9 +542,32 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (!req || req.method !== "GET") return;
   const url = new URL(req.url);
+
+  // Cache Google Fonts stylesheets/woff2 so installed standalone app works offline
+  if (
+    url.hostname === "fonts.googleapis.com" ||
+    url.hostname === "fonts.gstatic.com"
+  ) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        const net = fetch(req)
+          .then((resp) => {
+            if (resp && (resp.ok || resp.type === "opaque")) {
+              const copy = resp.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
+            }
+            return resp;
+          })
+          .catch(() => cached || Response.error());
+        return cached || net;
+      })
+    );
+    return;
+  }
+
   if (url.origin !== self.location.origin) return;
 
-  // Never serve stale responses for API calls, dynamic manifest, AssetLinks, or sw.js
+  // Never serve stale responses for live API calls, dynamic manifest, AssetLinks, or sw.js
   if (
     url.pathname.startsWith("/api/") ||
     url.pathname === "/manifest.json" ||
@@ -549,11 +575,15 @@ self.addEventListener("fetch", (event) => {
     url.pathname === "/sw.js" ||
     url.pathname.startsWith("/.well-known/")
   ) {
-    event.respondWith(fetch(req, { cache: "no-store" }));
+    event.respondWith(
+      fetch(req, { cache: "no-store" }).catch(
+        () => caches.match(req).then((c) => c || Response.error())
+      )
+    );
     return;
   }
 
-  // Navigation requests: Network-first with cached shell fallback
+  // Navigation requests: Network-first with cached shell fallback for standalone offline use
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req)
@@ -569,7 +599,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: Stale-While-Revalidate
+  // Static assets, scripts, CSS, and images: Stale-While-Revalidate (never resolve undefined)
   event.respondWith(
     caches.match(req).then((cached) => {
       const networkFetch = fetch(req)
@@ -580,7 +610,7 @@ self.addEventListener("fetch", (event) => {
           }
           return resp;
         })
-        .catch(() => cached);
+        .catch(() => cached || Response.error());
       return cached || networkFetch;
     })
   );

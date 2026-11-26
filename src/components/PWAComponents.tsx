@@ -41,10 +41,13 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
 
 interface InstallGuideModalProps {
   open: boolean;
-  mode: 'ios' | 'desktop';
+  mode: 'ios' | 'android' | 'desktop';
   isInstalled: boolean;
+  isInstallable?: boolean;
+  isInIframe?: boolean;
   lang: Language;
   storeName: string;
+  onTriggerInstantInstall?: () => void;
   onClose: () => void;
 }
 
@@ -52,11 +55,19 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
   open,
   mode,
   isInstalled,
+  isInstallable = false,
+  isInIframe = false,
   lang,
   storeName,
+  onTriggerInstantInstall,
   onClose,
 }) => {
   if (!open) return null;
+
+  const directAppUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname}?autoinstall=1`
+      : '/?autoinstall=1';
 
   return (
     <div
@@ -67,15 +78,16 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
     >
       <div
         className="tech-surface w-full max-w-md rounded-2xl border p-6 shadow-2xl"
+        data-testid="install-guide-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600/15 text-blue-500">
-              {mode === 'ios' ? (
-                <Smartphone className="h-6 w-6" />
-              ) : (
+              {mode === 'desktop' ? (
                 <Monitor className="h-6 w-6" />
+              ) : (
+                <Smartphone className="h-6 w-6" />
               )}
             </div>
             <div>
@@ -85,11 +97,15 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
               <p className="tech-text-secondary text-xs">
                 {mode === 'ios'
                   ? lang === 'ar'
-                    ? 'إضافة على شاشة الآيفون والآيباد (iOS Safari)'
-                    : 'Add to iPhone & iPad Home Screen'
-                  : lang === 'ar'
-                    ? 'تثبيت كتطبيق مستقل على الكمبيوتر أو أندرويد'
-                    : 'Standalone PWA on Windows, Mac, or Android'}
+                    ? 'تثبيت فوري على شاشة الآيفون والآيباد ويعمل كتطبيق مستقل'
+                    : 'Direct standalone install on iPhone & iPad Home Screen'
+                  : mode === 'android'
+                    ? lang === 'ar'
+                      ? 'تثبيت فوري كتطبيق مستقل على هاتف الأندرويد بدون متصفح'
+                      : 'Direct standalone install on Android phone'
+                    : lang === 'ar'
+                      ? 'تثبيت فوري كتطبيق مستقل على الكمبيوتر بدون متصفح'
+                      : 'Direct standalone desktop app (Windows / Mac)'}
               </p>
             </div>
           </div>
@@ -105,11 +121,14 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
 
         {isInstalled ? (
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-500">
-            <p className="font-bold">
-              {lang === 'ar'
-                ? 'التطبيق مثبت ويعمل حالياً بوضع التطبيق المستقل مع تحديثات تلقائية في الخلفية.'
-                : 'The app is currently installed and running in standalone mode with automatic background updates.'}
-            </p>
+            <div className="flex items-center gap-2 font-bold">
+              <CheckCircle2 className="h-5 w-5 shrink-0" />
+              <span>
+                {lang === 'ar'
+                  ? 'التطبيق مثبت الآن ويعمل كتطبيق مستقل مع تخزين داخلي للعمل حتى بدون إنترنت.'
+                  : 'The app is installed and runs standalone with offline caching.'}
+              </span>
+            </div>
           </div>
         ) : mode === 'ios' ? (
           <div className="space-y-3 text-sm">
@@ -120,8 +139,8 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
               <div className="flex-1">
                 <p className="font-bold">
                   {lang === 'ar'
-                    ? 'اضغط على زر المشاركة (Share) أسفل متصفح Safari'
-                    : 'Tap the Share button at the bottom of Safari'}
+                    ? 'اضغط على زر المشاركة (Share) أسفل شاشة iPhone'
+                    : 'Tap the Share button at the bottom of your iPhone screen'}
                 </p>
                 <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg bg-blue-600/15 px-2.5 py-1 text-xs font-semibold text-blue-500">
                   <Share className="h-4 w-4" />
@@ -153,23 +172,62 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
               </div>
               <p className="font-bold">
                 {lang === 'ar'
-                  ? 'اضغط "إضافة" في الزاوية العلوية ليظهر التطبيق بأيقونته الرسمية على شاشة الآيفون.'
-                  : 'Tap "Add" in the top corner to install the standalone app icon.'}
+                  ? 'اضغط "إضافة" ليظهر التطبيق فوراً على هاتفك ويعمل كتطبيق مستقل بدون شريط المتصفح.'
+                  : 'Tap "Add" to install the standalone app icon directly onto your iPhone.'}
               </p>
             </div>
           </div>
         ) : (
           <div className="space-y-3 text-sm">
-            <div className="tech-surface-muted rounded-xl border p-4 leading-relaxed">
-              <p className="font-bold mb-1.5">
-                {lang === 'ar'
-                  ? 'لتثبيت التطبيق مباشرة على Chrome أو Edge أو أندرويد:'
-                  : 'To install directly on Chrome, Edge, or Android:'}
+            {isInstallable && onTriggerInstantInstall && (
+              <button
+                type="button"
+                onClick={onTriggerInstantInstall}
+                data-testid="modal-instant-install-btn"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-extrabold text-white shadow-md transition hover:bg-emerald-500"
+              >
+                <Download className="h-4 w-4" />
+                <span>
+                  {lang === 'ar' ? 'تثبيت التطبيق فوراً الآن' : 'Install App Instantly Now'}
+                </span>
+              </button>
+            )}
+
+            {isInIframe && (
+              <a
+                href={directAppUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="direct-install-window-link"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-extrabold text-white shadow-md transition hover:bg-blue-500"
+              >
+                <Download className="h-4 w-4" />
+                <span>
+                  {lang === 'ar'
+                    ? 'تشغيل المثبّت المباشر بضغطة واحدة'
+                    : 'Launch Direct 1-Tap Installer'}
+                </span>
+              </a>
+            )}
+
+            <div className="tech-surface-muted rounded-xl border p-4 leading-relaxed space-y-1.5">
+              <p className="font-bold">
+                {mode === 'android'
+                  ? lang === 'ar'
+                    ? 'التثبيت المباشر على هاتف أندرويد:'
+                    : 'Direct Install on Android:'
+                  : lang === 'ar'
+                    ? 'التثبيت المباشر على الكمبيوتر (Windows / Mac):'
+                    : 'Direct Install on Computer (Windows / Mac):'}
               </p>
               <p className="tech-text-secondary text-xs leading-relaxed">
-                {lang === 'ar'
-                  ? 'افتح المتجر في نافذة متصفح مستقلة واضغط على أيقونة التثبيت (+) في شريط العنوان أو قائمة المتصفح -> "تثبيت التطبيق" (Install App).'
-                  : 'Open the store in a top-level browser tab and click the Install (+) icon in the address bar or Browser Menu -> Install App.'}
+                {mode === 'android'
+                  ? lang === 'ar'
+                    ? 'اضغط قائمة المتصفح (⋮) ثم اختر "تثبيت التطبيق" (Install App) ليتم التثبيت فوراً كأيقونة مستقلة تعمل بدون متصفح.'
+                    : 'Open the menu (⋮) and tap "Install App" to add the standalone app directly to your phone.'
+                  : lang === 'ar'
+                    ? 'اضغط أيقونة التثبيت (+) أعلى الشاشة أو من القائمة اختر "تثبيت التطبيق" ليفتح التطبيق مباشرة على سطح المكتب بدون متصفح.'
+                    : 'Click the Install (+) icon in the top bar or choose "Install App" from the menu to run directly as a standalone desktop app.'}
               </p>
             </div>
           </div>
@@ -178,9 +236,9 @@ export const InstallGuideModal: React.FC<InstallGuideModalProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="tech-accent-btn mt-5 w-full rounded-xl py-2.5 text-sm font-bold transition"
+          className="tech-surface-muted mt-5 w-full rounded-xl border py-2.5 text-sm font-bold transition hover:opacity-85"
         >
-          {lang === 'ar' ? 'فهمت' : 'Got it'}
+          {lang === 'ar' ? 'إغلاق' : 'Close'}
         </button>
       </div>
     </div>
